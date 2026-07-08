@@ -1,0 +1,87 @@
+name: qd-123-factory-security
+
+services:
+  mysql:
+    image: ${DOCKER_REGISTRY}mysql:8.0
+    container_name: qd-123-factory-security-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:${MYSQL_PORT}:${MYSQL_INTERNAL_PORT}"
+    volumes:
+      - ./mysql/init:/docker-entrypoint-initdb.d
+      - mysql_data:/var/lib/mysql
+    mem_limit: ${MYSQL_MEM_LIMIT}
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - factory-security-net
+
+  redis:
+    image: ${DOCKER_REGISTRY}redis:7-alpine
+    container_name: qd-123-factory-security-redis
+    restart: always
+    ports:
+      - "127.0.0.1:${REDIS_PORT}:${REDIS_INTERNAL_PORT}"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - factory-security-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY}
+    container_name: qd-123-factory-security-backend
+    restart: always
+    ports:
+      - "127.0.0.1:${BACKEND_PORT}:${BACKEND_INTERNAL_PORT}"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:${MYSQL_INTERNAL_PORT}/${MYSQL_DATABASE}?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: ${REDIS_INTERNAL_PORT}
+    networks:
+      - factory-security-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY}
+    container_name: qd-123-factory-security-frontend
+    restart: always
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT}:${FRONTEND_INTERNAL_PORT}"
+    depends_on:
+      - backend
+    networks:
+      - factory-security-net
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  factory-security-net:
+    driver: bridge
