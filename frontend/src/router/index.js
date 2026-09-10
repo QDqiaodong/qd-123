@@ -16,6 +16,12 @@ const routes = [
     name: 'ZoneTag',
     component: () => import('@/views/ZoneTagList.vue'),
     meta: { title: '分区标签管理' }
+  },
+  {
+    path: '/wiring-plan',
+    name: 'WiringPlan',
+    component: () => import('@/views/WiringPlanList.vue'),
+    meta: { title: '布线方案管理' }
   }
 ]
 

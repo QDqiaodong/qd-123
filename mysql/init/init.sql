@@ -67,4 +67,54 @@ INSERT IGNORE INTO `accessory` (`accessory_name`, `model`, `material`, `scene`, 
 ('防爆摄像头', 'DS-2CD3T46', '铝合金', '厂区外围监控', 2, 8, 'MP', 5, '400万像素防爆摄像机'),
 ('半球摄像机', 'DS-2CD3346', '塑料', '室内监控', 2, 6, 'MP', 5, '400万像素半球摄像机');
 
+-- ----------------------------
+-- 布线方案表（幂等建表）
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `wiring_plan` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `plan_name` varchar(200) NOT NULL COMMENT '方案名称',
+  `scene` varchar(200) DEFAULT NULL COMMENT '适用场景',
+  `description` varchar(500) DEFAULT NULL COMMENT '方案说明',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '启用状态：0-停用，1-启用',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_plan_name` (`plan_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='布线方案表';
+
+-- ----------------------------
+-- 布线方案配件明细表（幂等建表，同一方案内配件唯一）
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `wiring_plan_detail` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `plan_id` bigint NOT NULL COMMENT '布线方案ID',
+  `accessory_id` bigint NOT NULL COMMENT '配件ID',
+  `quantity` int NOT NULL COMMENT '需求数量',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_plan_accessory` (`plan_id`, `accessory_id`),
+  KEY `idx_accessory_id` (`accessory_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='布线方案配件明细表';
+
+-- ----------------------------
+-- 初始化布线方案数据（幂等插入，按唯一键 plan_name 去重）
+-- ----------------------------
+INSERT IGNORE INTO `wiring_plan` (`id`, `plan_name`, `scene`, `description`, `status`) VALUES
+(1, '厂区外围监控布线方案', '厂区外围监控', '外围周界监控点位的标准布线方案，含视频与供电线缆及配套辅材', 1),
+(2, '机房网络布线方案', '机房布线', '机房内部千兆网络布线方案，含桥架、网线及终端配件', 1);
+
+-- ----------------------------
+-- 初始化布线方案明细数据（幂等插入，按唯一键 plan_id+accessory_id 去重）
+-- ----------------------------
+INSERT IGNORE INTO `wiring_plan_detail` (`plan_id`, `accessory_id`, `quantity`) VALUES
+(1, 11, 12),
+(1, 5, 600),
+(1, 6, 24),
+(1, 9, 300),
+(2, 2, 50),
+(2, 4, 800),
+(2, 7, 100),
+(2, 10, 200);
+
 SET FOREIGN_KEY_CHECKS = 1;

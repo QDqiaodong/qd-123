@@ -14,4 +14,6 @@ public interface AccessoryService extends IService<Accessory> {
     boolean update(AccessoryDTO dto);
 
     boolean updateZone(Long id, Long zoneTagId);
+
+    boolean delete(Long id);
 }

@@ -24,6 +24,10 @@
             <el-icon><CollectionTag /></el-icon>
             <span>分区标签管理</span>
           </el-menu-item>
+          <el-menu-item index="/wiring-plan">
+            <el-icon><Connection /></el-icon>
+            <span>布线方案管理</span>
+          </el-menu-item>
         </el-menu>
       </el-aside>
       <el-main class="layout-main">

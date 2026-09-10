@@ -45,7 +45,7 @@ public class AccessoryController {
 
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
-        accessoryService.removeById(id);
+        accessoryService.delete(id);
         return Result.success();
     }
 
