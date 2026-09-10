@@ -60,6 +60,7 @@
               v-model="row.status"
               :active-value="1"
               :inactive-value="0"
+              :loading="row.statusLoading"
               @change="(val) => handleStatusChange(row, val)"
             />
           </template>
@@ -336,11 +337,19 @@ const handleDelete = (row) => {
 }
 
 const handleStatusChange = async (row, val) => {
+  // 请求未返回前忽略重复切换，避免连续快速点击导致状态错乱
+  if (row.statusLoading) {
+    return
+  }
+  row.statusLoading = true
   try {
     await updateWiringPlanStatus(row.id, val)
     ElMessage.success(val === 1 ? '已启用' : '已停用')
   } catch (e) {
-    loadData()
+    // 切换失败：开关恢复原状态（后端错误提示由请求拦截器统一展示）
+    row.status = val === 1 ? 0 : 1
+  } finally {
+    row.statusLoading = false
   }
 }
 

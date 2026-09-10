@@ -9,6 +9,10 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url))
     }
   },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./vitest.setup.js']
+  },
   server: {
     host: '127.0.0.1',
     port: 3008,

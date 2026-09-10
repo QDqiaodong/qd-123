@@ -135,10 +135,18 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
         if (status == null || (status != 0 && status != 1)) {
             throw new RuntimeException("启用状态不合法");
         }
+        WiringPlan existing = getById(id);
+        if (existing == null) {
+            throw new RuntimeException("布线方案不存在或已被删除");
+        }
         WiringPlan plan = new WiringPlan();
         plan.setId(id);
         plan.setStatus(status);
-        return updateById(plan);
+        boolean result = updateById(plan);
+        if (!result) {
+            throw new RuntimeException("布线方案状态更新失败，请刷新后重试");
+        }
+        return true;
     }
 
     private int countDetails(Long planId) {
