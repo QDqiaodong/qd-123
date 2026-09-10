@@ -39,10 +39,16 @@
           <el-icon color="#409EFF"><Connection /></el-icon>
           <span>布线方案列表</span>
         </div>
-        <el-button type="primary" @click="handleAdd">
-          <el-icon><Plus /></el-icon>
-          新增方案
-        </el-button>
+        <div class="header-actions">
+          <el-button type="success" plain :loading="exporting" @click="handleExport">
+            <el-icon><Download /></el-icon>
+            导出当前筛选结果
+          </el-button>
+          <el-button type="primary" @click="handleAdd">
+            <el-icon><Plus /></el-icon>
+            新增方案
+          </el-button>
+        </div>
       </div>
 
       <el-table :data="tableData" border stripe style="width: 100%">
@@ -202,19 +208,23 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Plus, Connection } from '@element-plus/icons-vue'
+import { Search, Plus, Connection, Download } from '@element-plus/icons-vue'
 import {
   getWiringPlanPage,
   getWiringPlanById,
   addWiringPlan,
   updateWiringPlan,
   deleteWiringPlan,
-  updateWiringPlanStatus
+  updateWiringPlanStatus,
+  exportWiringPlans
 } from '@/api/wiringPlan'
 import { getAccessoryPage } from '@/api/accessory'
 
 const tableData = ref([])
 const accessoryList = ref([])
+
+// 导出进行中标记：请求未返回前重复点击直接忽略，避免重复下载
+const exporting = ref(false)
 
 const searchForm = reactive({
   keyword: '',
@@ -273,6 +283,97 @@ const loadData = async () => {
 const loadAccessoryList = async () => {
   const res = await getAccessoryPage({ pageNum: 1, pageSize: 999 })
   accessoryList.value = res.records
+}
+
+// 导出文件名主体最长保留 80 个字符（含扩展名），防止超长关键词拼出的文件名超出文件系统限制
+const MAX_FILENAME_LENGTH = 80
+
+// 超长时截断文件名主体并保留 .csv 扩展名
+const truncateFileName = (name) => {
+  if (!name || name.length <= MAX_FILENAME_LENGTH) {
+    return name
+  }
+  const dotIndex = name.lastIndexOf('.')
+  const ext = dotIndex >= 0 ? name.slice(dotIndex) : ''
+  const stem = dotIndex >= 0 ? name.slice(0, dotIndex) : name
+  return stem.slice(0, MAX_FILENAME_LENGTH - ext.length) + ext
+}
+
+const buildFallbackFileName = () => {
+  const date = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  const datePart = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
+  const keyword = (searchForm.keyword || '').trim()
+  const keywordPart = keyword ? `_${keyword}` : ''
+  const statusPart = searchForm.status === 1 ? '_启用' : searchForm.status === 0 ? '_停用' : ''
+  const main = `布线方案导出${keywordPart}${statusPart}_${datePart}.csv`
+  return truncateFileName(main)
+}
+
+// 优先使用后端返回的中文文件名（Content-Disposition: filename*），解析失败或超长时使用前端兜底名
+const resolveExportFileName = (contentDisposition) => {
+  const fallback = buildFallbackFileName()
+  if (!contentDisposition) {
+    return fallback
+  }
+  const starMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (starMatch && starMatch[1]) {
+    try {
+      const name = decodeURIComponent(starMatch[1])
+      return truncateFileName(name) || fallback
+    } catch (e) {
+      return fallback
+    }
+  }
+  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
+  if (plainMatch && plainMatch[1] && /[一-龥]/.test(plainMatch[1])) {
+    return truncateFileName(plainMatch[1])
+  }
+  return fallback
+}
+
+const triggerBrowserDownload = (blob, fileName) => {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  // 释放 Blob URL，避免内存泄漏
+  window.URL.revokeObjectURL(url)
+}
+
+const handleExport = async () => {
+  // 导出请求未完成前忽略重复点击
+  if (exporting.value) {
+    return
+  }
+  exporting.value = true
+  try {
+    // 按当前筛选条件实时确认结果是否为空（搜索框输入后未点搜索时表格数据可能仍是旧条件）
+    const pageRes = await getWiringPlanPage({
+      pageNum: 1,
+      pageSize: 1,
+      keyword: searchForm.keyword,
+      status: searchForm.status
+    })
+    if (!pageRes.records || pageRes.records.length === 0) {
+      ElMessage.warning('当前筛选条件下没有可导出的方案')
+      return
+    }
+    const response = await exportWiringPlans({
+      keyword: searchForm.keyword,
+      status: searchForm.status
+    })
+    const fileName = resolveExportFileName(response.headers['content-disposition'])
+    triggerBrowserDownload(response.data, fileName)
+    ElMessage.success('导出成功')
+  } catch (e) {
+    // 错误提示已由请求拦截器统一展示
+  } finally {
+    exporting.value = false
+  }
 }
 
 const handleSearch = () => {
@@ -458,6 +559,12 @@ onMounted(() => {
   font-size: 16px;
   font-weight: 600;
   color: #303133;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .pagination-container {
