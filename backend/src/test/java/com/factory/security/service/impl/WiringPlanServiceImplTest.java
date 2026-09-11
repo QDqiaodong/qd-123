@@ -1,13 +1,16 @@
 package com.factory.security.service.impl;
 
 import com.factory.security.entity.Accessory;
+import com.factory.security.entity.StockWriteoff;
 import com.factory.security.entity.WiringPlan;
 import com.factory.security.entity.WiringPlanDetail;
 import com.factory.security.entity.ZoneTag;
 import com.factory.security.mapper.AccessoryMapper;
+import com.factory.security.mapper.StockWriteoffMapper;
 import com.factory.security.mapper.WiringPlanDetailMapper;
 import com.factory.security.mapper.WiringPlanMapper;
 import com.factory.security.mapper.ZoneTagMapper;
+import com.factory.security.vo.StockGapVO;
 import com.factory.security.vo.WiringPlanDetailVO;
 import com.factory.security.vo.WiringPlanExportRowVO;
 import com.factory.security.vo.WiringPlanVO;
@@ -25,10 +28,14 @@ import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -49,6 +56,9 @@ class WiringPlanServiceImplTest {
 
     @Mock
     private ZoneTagMapper zoneTagMapper;
+
+    @Mock
+    private StockWriteoffMapper stockWriteoffMapper;
 
     @InjectMocks
     private WiringPlanServiceImpl wiringPlanService;
@@ -445,5 +455,222 @@ class WiringPlanServiceImplTest {
 
         assertEquals(exportOrder, detailOrder);
         assertEquals(Arrays.asList("RVV电源线", "六类网线", "防爆摄像头", "配件已删除", "扎带"), detailOrder);
+    }
+
+    // -------------------- 库存缺口列表 --------------------
+
+    private Accessory buildStockAccessory(Long id, String name, Long zoneTagId, Integer stock, Integer deleted) {
+        Accessory accessory = new Accessory();
+        accessory.setId(id);
+        accessory.setAccessoryName(name);
+        accessory.setZoneTagId(zoneTagId);
+        accessory.setStockQuantity(stock);
+        accessory.setDeleted(deleted);
+        return accessory;
+    }
+
+    private StockWriteoff buildWriteoff(Long planId) {
+        StockWriteoff writeoff = new StockWriteoff();
+        writeoff.setId(1L);
+        writeoff.setPlanId(planId);
+        writeoff.setPlanName("测试方案");
+        writeoff.setCreateTime(LocalDateTime.now());
+        return writeoff;
+    }
+
+    /**
+     * 需求合计只统计已启用且未核销的方案：
+     * 方案1启用（未核销）需求 600，方案3启用但已核销不参与，方案2停用不参与；
+     * 现存量不足标红、无需求配件缺口为 0，未分配分区排在最后
+     */
+    @Test
+    void stockGapsOnlyCountEnabledAndNotWrittenOffPlans() {
+        WiringPlan enabledPlan = buildPlan(1L, "启用方案", null, 1, "2026-09-02T10:00:00");
+        WiringPlan disabledPlan = buildPlan(2L, "停用方案", null, 0, "2026-09-01T10:00:00");
+        WiringPlan writtenOffPlan = buildPlan(3L, "已核销方案", null, 1, "2026-09-03T10:00:00");
+        when(baseMapper.selectList(any())).thenReturn(Arrays.asList(enabledPlan, disabledPlan, writtenOffPlan));
+        // 仅启用方案（1、3）查询核销记录；方案3已核销
+        when(stockWriteoffMapper.selectList(any())).thenReturn(Collections.singletonList(buildWriteoff(3L)));
+        // 参与合计的只有方案1：RVV电源线需求600；停用/已核销方案的明细不查询
+        when(wiringPlanDetailMapper.selectList(any())).thenReturn(Arrays.asList(
+                buildDetail(10L, 1L, 100L, 600)
+        ));
+        when(accessoryMapper.selectList(any())).thenReturn(Arrays.asList(
+                buildStockAccessory(100L, "RVV电源线", 2L, 500, 0),
+                buildStockAccessory(101L, "防爆摄像头", 5L, 20, 0),
+                buildStockAccessory(102L, "扎带", null, 400, 0)
+        ));
+        when(zoneTagMapper.selectBatchIds(any())).thenReturn(Arrays.asList(
+                buildZone(2L, "线缆布线区", 2),
+                buildZone(5L, "监控设备区", 5)
+        ));
+
+        List<StockGapVO> gaps = wiringPlanService.listStockGaps();
+
+        assertEquals(3, gaps.size());
+        // 排序：线缆布线区(2) -> 监控设备区(5) -> 未分配分区最后
+        assertEquals(Arrays.asList("RVV电源线", "防爆摄像头", "扎带"),
+                gaps.stream().map(StockGapVO::getAccessoryName).collect(java.util.stream.Collectors.toList()));
+
+        StockGapVO shortage = gaps.get(0);
+        assertEquals(600, shortage.getRequiredQuantity());
+        assertEquals(100, shortage.getGapQuantity());
+        assertTrue(shortage.getShortage());
+        assertFalse(shortage.getUnassignedZone());
+        assertFalse(shortage.getAccessoryDeleted());
+
+        StockGapVO sufficient = gaps.get(1);
+        assertEquals(0, sufficient.getRequiredQuantity());
+        assertEquals(0, sufficient.getGapQuantity());
+        assertFalse(sufficient.getShortage());
+
+        StockGapVO unassigned = gaps.get(2);
+        assertTrue(unassigned.getUnassignedZone());
+        assertEquals(0, unassigned.getRequiredQuantity());
+    }
+
+    @Test
+    void stockGapsWithNoEnabledPlansReturnAllAccessoriesWithoutRequirement() {
+        when(baseMapper.selectList(any())).thenReturn(Collections.emptyList());
+        when(accessoryMapper.selectList(any())).thenReturn(Collections.singletonList(
+                buildStockAccessory(100L, "RVV电源线", 2L, 500, 0)));
+        when(zoneTagMapper.selectBatchIds(any())).thenReturn(Collections.singletonList(
+                buildZone(2L, "线缆布线区", 2)));
+
+        List<StockGapVO> gaps = wiringPlanService.listStockGaps();
+
+        assertEquals(1, gaps.size());
+        assertEquals(0, gaps.get(0).getRequiredQuantity());
+        assertEquals(0, gaps.get(0).getGapQuantity());
+        assertFalse(gaps.get(0).getShortage());
+        // 没有参与合计的方案，不应查询明细表
+        verify(wiringPlanDetailMapper, never()).selectList(any());
+    }
+
+    @Test
+    void stockGapsListDeletedAccessoryReferencedByEnabledPlanButNotShortageRed() {
+        WiringPlan enabledPlan = buildPlan(1L, "启用方案", null, 1, "2026-09-02T10:00:00");
+        when(baseMapper.selectList(any())).thenReturn(Collections.singletonList(enabledPlan));
+        when(stockWriteoffMapper.selectList(any())).thenReturn(Collections.emptyList());
+        when(wiringPlanDetailMapper.selectList(any())).thenReturn(Collections.singletonList(
+                buildDetail(10L, 1L, 999L, 30)));
+        when(accessoryMapper.selectList(any())).thenReturn(Collections.emptyList());
+        // 正常档案查不到 999，走含已删除配件的批量查询
+        when(accessoryMapper.selectAllByIdsIncludingDeleted(any())).thenReturn(Collections.singletonList(
+                buildStockAccessory(999L, "旧型号配件", null, 0, 1)));
+
+        List<StockGapVO> gaps = wiringPlanService.listStockGaps();
+
+        assertEquals(1, gaps.size());
+        StockGapVO row = gaps.get(0);
+        assertEquals(999L, row.getAccessoryId());
+        assertTrue(row.getAccessoryDeleted());
+        assertTrue(row.getUnassignedZone());
+        // 已删除配件仍显示但不标红、不参与缺口核销
+        assertFalse(row.getShortage());
+        assertEquals(0, row.getGapQuantity());
+        verify(accessoryMapper).selectAllByIdsIncludingDeleted(any());
+    }
+
+    // -------------------- 核销出库 --------------------
+
+    @Test
+    void writeoffDeductsStockAndRecordsOnce() {
+        WiringPlan plan = buildPlan(1L, "厂区外围监控布线方案", "厂区外围监控", 1, "2026-09-02T10:00:00");
+        when(baseMapper.selectById(1L)).thenReturn(plan);
+        when(stockWriteoffMapper.selectOne(any())).thenReturn(null);
+        when(wiringPlanDetailMapper.selectList(any())).thenReturn(Arrays.asList(
+                buildDetail(10L, 1L, 100L, 600),
+                buildDetail(11L, 1L, 101L, 12)));
+        when(accessoryMapper.selectBatchIds(any())).thenReturn(Arrays.asList(
+                buildStockAccessory(100L, "RVV电源线", 2L, 600, 0),
+                buildStockAccessory(101L, "防爆摄像头", 5L, 20, 0)));
+        when(accessoryMapper.deductStock(anyLong(), anyInt())).thenReturn(1);
+        when(stockWriteoffMapper.insert(any(StockWriteoff.class))).thenReturn(1);
+
+        boolean result = wiringPlanService.writeoff(1L);
+
+        assertTrue(result);
+        verify(accessoryMapper).deductStock(100L, 600);
+        verify(accessoryMapper).deductStock(101L, 12);
+        ArgumentCaptor<StockWriteoff> captor = ArgumentCaptor.forClass(StockWriteoff.class);
+        verify(stockWriteoffMapper).insert(captor.capture());
+        assertEquals(1L, captor.getValue().getPlanId());
+        assertEquals("厂区外围监控布线方案", captor.getValue().getPlanName());
+    }
+
+    @Test
+    void writeoffRejectsAlreadyWrittenOffPlanWithoutDeduction() {
+        WiringPlan plan = buildPlan(1L, "启用方案", null, 1, "2026-09-02T10:00:00");
+        when(baseMapper.selectById(1L)).thenReturn(plan);
+        when(stockWriteoffMapper.selectOne(any())).thenReturn(buildWriteoff(1L));
+
+        RuntimeException e = assertThrows(RuntimeException.class, () -> wiringPlanService.writeoff(1L));
+
+        assertEquals("该方案已核销出库，同一方案不可重复核销", e.getMessage());
+        verify(accessoryMapper, never()).deductStock(anyLong(), anyInt());
+        verify(stockWriteoffMapper, never()).insert(any(StockWriteoff.class));
+    }
+
+    @Test
+    void writeoffRejectsDisabledPlan() {
+        WiringPlan plan = buildPlan(2L, "停用方案", null, 0, "2026-09-01T10:00:00");
+        when(baseMapper.selectById(2L)).thenReturn(plan);
+
+        RuntimeException e = assertThrows(RuntimeException.class, () -> wiringPlanService.writeoff(2L));
+
+        assertEquals("停用状态的方案不可核销出库，请先启用方案", e.getMessage());
+        verify(stockWriteoffMapper, never()).selectOne(any());
+        verify(accessoryMapper, never()).deductStock(anyLong(), anyInt());
+    }
+
+    @Test
+    void writeoffRejectsPlanWithDeletedAccessory() {
+        WiringPlan plan = buildPlan(1L, "启用方案", null, 1, "2026-09-02T10:00:00");
+        when(baseMapper.selectById(1L)).thenReturn(plan);
+        when(stockWriteoffMapper.selectOne(any())).thenReturn(null);
+        when(wiringPlanDetailMapper.selectList(any())).thenReturn(Arrays.asList(
+                buildDetail(10L, 1L, 100L, 600),
+                buildDetail(11L, 1L, 999L, 3)));
+        when(accessoryMapper.selectBatchIds(any())).thenReturn(Collections.singletonList(
+                buildStockAccessory(100L, "RVV电源线", 2L, 1000, 0)));
+
+        RuntimeException e = assertThrows(RuntimeException.class, () -> wiringPlanService.writeoff(1L));
+
+        assertEquals("方案包含已删除的配件，无法核销，请先调整方案明细", e.getMessage());
+        verify(accessoryMapper, never()).deductStock(anyLong(), anyInt());
+        verify(stockWriteoffMapper, never()).insert(any(StockWriteoff.class));
+    }
+
+    @Test
+    void writeoffRejectsInsufficientStockWithoutDeduction() {
+        WiringPlan plan = buildPlan(1L, "启用方案", null, 1, "2026-09-02T10:00:00");
+        when(baseMapper.selectById(1L)).thenReturn(plan);
+        when(stockWriteoffMapper.selectOne(any())).thenReturn(null);
+        when(wiringPlanDetailMapper.selectList(any())).thenReturn(Collections.singletonList(
+                buildDetail(10L, 1L, 100L, 600)));
+        when(accessoryMapper.selectBatchIds(any())).thenReturn(Collections.singletonList(
+                buildStockAccessory(100L, "RVV电源线", 2L, 500, 0)));
+
+        RuntimeException e = assertThrows(RuntimeException.class, () -> wiringPlanService.writeoff(1L));
+
+        assertTrue(e.getMessage().contains("现存量不足"));
+        verify(accessoryMapper, never()).deductStock(anyLong(), anyInt());
+        verify(stockWriteoffMapper, never()).insert(any(StockWriteoff.class));
+    }
+
+    @Test
+    void updateWrittenOffPlanRejected() {
+        com.factory.security.dto.WiringPlanDTO dto = new com.factory.security.dto.WiringPlanDTO();
+        dto.setId(1L);
+        dto.setPlanName("已核销方案");
+        dto.setStatus(1);
+        when(baseMapper.selectById(1L)).thenReturn(buildPlan(1L, "已核销方案", null, 1, "2026-09-02T10:00:00"));
+        when(stockWriteoffMapper.selectOne(any())).thenReturn(buildWriteoff(1L));
+
+        RuntimeException e = assertThrows(RuntimeException.class, () -> wiringPlanService.update(dto));
+
+        assertEquals("该方案已核销出库，不可修改，如需调整请新建方案", e.getMessage());
+        verify(baseMapper, never()).updateById(any(WiringPlan.class));
     }
 }

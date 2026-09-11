@@ -1,6 +1,7 @@
 package com.factory.security.dto;
 
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
@@ -30,8 +31,12 @@ public class AccessoryDTO {
 
     private String specUnit;
 
-    @NotNull(message = "所属分区不能为空")
+    /** 所属分区允许为空：未分配分区的配件在缺口列表中单独列出 */
     private Long zoneTagId;
+
+    @NotNull(message = "现存量不能为空")
+    @Min(value = 0, message = "现存量不能为负数")
+    private Integer stockQuantity;
 
     private String remark;
 }

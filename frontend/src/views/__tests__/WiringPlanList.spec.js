@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import ElementPlus, { ElMessage } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import * as Icons from '@element-plus/icons-vue'
 import WiringPlanList from '@/views/WiringPlanList.vue'
 import {
   getWiringPlanPage,
   getWiringPlanById,
-  updateWiringPlanStatus
+  updateWiringPlanStatus,
+  writeoffWiringPlan
 } from '@/api/wiringPlan'
 import { getAccessoryPage } from '@/api/accessory'
 
@@ -16,7 +17,9 @@ vi.mock('@/api/wiringPlan', () => ({
   addWiringPlan: vi.fn(),
   updateWiringPlan: vi.fn(),
   deleteWiringPlan: vi.fn(),
-  updateWiringPlanStatus: vi.fn()
+  updateWiringPlanStatus: vi.fn(),
+  writeoffWiringPlan: vi.fn(),
+  getStockGaps: vi.fn()
 }))
 
 vi.mock('@/api/accessory', () => ({
@@ -241,6 +244,198 @@ describe('布线方案详情 - 分区分组展示', () => {
 
     expect(wrapper.find('.zone-detail-section .el-empty').exists()).toBe(true)
     expect(wrapper.findAll('.zone-group').length).toBe(0)
+
+    wrapper.unmount()
+  })
+})
+
+describe('布线方案 - 核销出库', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const stockRows = () => [
+    {
+      id: 1,
+      planName: '库存充足方案',
+      scene: '厂区外围监控',
+      detailCount: 1,
+      status: 1,
+      writeoff: false,
+      stockSufficient: true,
+      hasDeletedAccessory: false,
+      createTime: '2026-09-01 10:00:00'
+    },
+    {
+      id: 2,
+      planName: '库存不足方案',
+      scene: '机房布线',
+      detailCount: 1,
+      status: 1,
+      writeoff: false,
+      stockSufficient: false,
+      hasDeletedAccessory: false,
+      createTime: '2026-09-02 10:00:00'
+    },
+    {
+      id: 3,
+      planName: '已核销方案',
+      scene: '室内监控',
+      detailCount: 1,
+      status: 1,
+      writeoff: true,
+      stockSufficient: true,
+      hasDeletedAccessory: false,
+      writeoffTime: '2026-09-10 12:00:00',
+      createTime: '2026-09-03 10:00:00'
+    }
+  ]
+
+  const mountStockPage = async (rows = stockRows()) => {
+    getWiringPlanPage.mockResolvedValue({ records: rows, total: rows.length })
+    getAccessoryPage.mockResolvedValue({ records: [], total: 0 })
+    const wrapper = mount(WiringPlanList, {
+      global: {
+        plugins: [ElementPlus],
+        components: { ...Icons }
+      }
+    })
+    await flushPromises()
+    return wrapper
+  }
+
+  const writeoffButtonOf = (wrapper, planName) => {
+    const row = wrapper
+      .findAll('.el-table__row')
+      .find((r) => r.text().includes(planName))
+    expect(row, `未找到方案 ${planName} 所在行`).toBeTruthy()
+    return row.findAll('button').find((b) => b.text().includes('核销出库'))
+  }
+
+  it('库存充足：确认后调用核销接口、提示成功并刷新列表', async () => {
+    const wrapper = await mountStockPage()
+    ElMessageBox.confirm.mockResolvedValue(undefined)
+    writeoffWiringPlan.mockResolvedValue(undefined)
+    getWiringPlanPage.mockResolvedValueOnce({ records: stockRows(), total: 3 })
+
+    const btn = writeoffButtonOf(wrapper, '库存充足方案')
+    expect(btn.attributes('disabled')).toBeUndefined()
+    await btn.trigger('click')
+    await flushPromises()
+
+    expect(writeoffWiringPlan).toHaveBeenCalledTimes(1)
+    expect(writeoffWiringPlan).toHaveBeenCalledWith(1)
+    expect(ElMessage.success).toHaveBeenCalledWith('核销出库成功，现存量已扣减')
+    // 核销成功后重新拉取列表
+    expect(getWiringPlanPage).toHaveBeenCalledTimes(2)
+
+    wrapper.unmount()
+  })
+
+  it('库存不足：核销按钮禁用，不调用接口', async () => {
+    const wrapper = await mountStockPage()
+    const btn = writeoffButtonOf(wrapper, '库存不足方案')
+    expect(btn.attributes('disabled')).toBeDefined()
+    await btn.trigger('click')
+    await flushPromises()
+
+    expect(writeoffWiringPlan).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('已核销方案：按钮禁用且不可再编辑', async () => {
+    const wrapper = await mountStockPage()
+
+    const writeoffBtn = writeoffButtonOf(wrapper, '已核销方案')
+    expect(writeoffBtn.attributes('disabled')).toBeDefined()
+
+    const row = wrapper
+      .findAll('.el-table__row')
+      .find((r) => r.text().includes('已核销方案'))
+    const editBtn = row.findAll('button').find((b) => b.text().includes('编辑'))
+    expect(editBtn.attributes('disabled')).toBeDefined()
+    expect(row.text()).toContain('已核销')
+
+    wrapper.unmount()
+  })
+
+  it('停用方案不展示库存不足，核销按钮禁用', async () => {
+    const rows = [
+      {
+        id: 4,
+        planName: '停用方案',
+        scene: '临时布线',
+        detailCount: 1,
+        status: 0,
+        writeoff: false,
+        stockSufficient: true,
+        hasDeletedAccessory: false,
+        createTime: '2026-09-04 10:00:00'
+      }
+    ]
+    const wrapper = await mountStockPage(rows)
+    const row = wrapper
+      .findAll('.el-table__row')
+      .find((r) => r.text().includes('停用方案'))
+    expect(row.text()).toContain('停用不合计')
+    const btn = writeoffButtonOf(wrapper, '停用方案')
+    expect(btn.attributes('disabled')).toBeDefined()
+
+    wrapper.unmount()
+  })
+
+  it('含已删除配件的方案：详情弹窗标红且核销按钮禁用', async () => {
+    const wrapper = await mountStockPage([
+      {
+        id: 5,
+        planName: '含失效配件方案',
+        scene: '监控',
+        detailCount: 1,
+        status: 1,
+        writeoff: false,
+        stockSufficient: false,
+        hasDeletedAccessory: true,
+        createTime: '2026-09-05 10:00:00'
+      }
+    ])
+    const plan = {
+      id: 5,
+      planName: '含失效配件方案',
+      scene: '监控',
+      status: 1,
+      writeoff: false,
+      stockSufficient: false,
+      hasDeletedAccessory: true,
+      createTime: '2026-09-05 10:00:00',
+      description: null,
+      detailCount: 1,
+      details: [
+        {
+          id: 90,
+          accessoryId: 999,
+          accessoryName: '配件已删除',
+          model: null,
+          quantity: 3,
+          stockQuantity: null,
+          accessoryDeleted: true,
+          zoneTagId: null,
+          zoneTagName: null
+        }
+      ]
+    }
+    getWiringPlanById.mockResolvedValue(plan)
+    const row = wrapper
+      .findAll('.el-table__row')
+      .find((r) => r.text().includes('含失效配件方案'))
+    await row.findAll('button').find((b) => b.text().includes('详情')).trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('无法核销出库')
+    expect(wrapper.text()).toContain('不可核销')
+    const footerBtn = wrapper
+      .findAll('.el-dialog button')
+      .filter((b) => b.text().includes('核销出库'))[0]
+    expect(footerBtn.attributes('disabled')).toBeDefined()
 
     wrapper.unmount()
   })

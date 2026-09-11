@@ -60,6 +60,15 @@
             <el-tag type="info" effect="plain">{{ row.detailCount }} 种</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="库存校验" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.writeoff" type="success" effect="dark">已核销</el-tag>
+            <el-tag v-else-if="row.status !== 1" type="info" effect="plain">停用不合计</el-tag>
+            <el-tag v-else-if="row.hasDeletedAccessory" type="danger" effect="plain">含已删除配件</el-tag>
+            <el-tag v-else-if="row.stockSufficient" type="success" effect="plain">库存充足</el-tag>
+            <el-tag v-else type="danger" effect="dark">库存不足</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="启用状态" width="100" align="center">
           <template #default="{ row }">
             <el-switch
@@ -72,10 +81,13 @@
           </template>
         </el-table-column>
         <el-table-column prop="createTime" label="创建时间" width="180" align="center" />
-        <el-table-column label="操作" width="200" fixed="right" align="center">
+        <el-table-column label="操作" width="270" fixed="right" align="center">
           <template #default="{ row }">
             <el-button link type="success" @click="handleView(row)">详情</el-button>
-            <el-button link type="primary" @click="handleEdit(row)">编辑</el-button>
+            <el-button link type="primary" :disabled="row.writeoff" @click="handleEdit(row)">编辑</el-button>
+            <el-button link type="warning" @click="handleWriteoff(row)" :disabled="!canWriteoff(row)">
+              核销出库
+            </el-button>
             <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -176,11 +188,50 @@
               {{ currentPlan.status === 1 ? '启用' : '停用' }}
             </el-tag>
           </el-descriptions-item>
+          <el-descriptions-item label="核销状态">
+            <el-tag v-if="currentPlan.writeoff" type="success" effect="dark">
+              已核销出库{{ currentPlan.writeoffTime ? `（${formatTime(currentPlan.writeoffTime)}）` : '' }}
+            </el-tag>
+            <span v-else>未核销</span>
+          </el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ currentPlan.createTime }}</el-descriptions-item>
           <el-descriptions-item label="方案说明" :span="2">
             {{ currentPlan.description || '-' }}
           </el-descriptions-item>
         </el-descriptions>
+
+        <el-alert
+          v-if="currentPlan.writeoff"
+          title="该方案已核销出库，现存量已按下列需求数量扣减；同一方案不可重复核销。"
+          type="success"
+          :closable="false"
+          show-icon
+          class="detail-alert"
+        />
+        <el-alert
+          v-else-if="currentPlan.hasDeletedAccessory"
+          title="方案包含已删除配件，无法核销出库，请先调整方案明细。"
+          type="error"
+          :closable="false"
+          show-icon
+          class="detail-alert"
+        />
+        <el-alert
+          v-else-if="currentPlan.status === 1 && !currentPlan.stockSufficient"
+          title="部分配件现存量不足（红色行），请补充库存后再核销出库。"
+          type="error"
+          :closable="false"
+          show-icon
+          class="detail-alert"
+        />
+        <el-alert
+          v-else-if="currentPlan.status === 1"
+          title="配件现存量充足，可核销出库；核销后将按需求数量扣减现存量且不可重复核销。"
+          type="success"
+          :closable="false"
+          show-icon
+          class="detail-alert"
+        />
 
         <div class="zone-detail-section">
           <div class="section-title">配件明细（按库房分区）</div>
@@ -190,16 +241,48 @@
               <el-tag type="primary" effect="light">{{ group.zoneName }}</el-tag>
               <span class="zone-group-count">共 {{ group.items.length }} 种配件</span>
             </div>
-            <el-table :data="group.items" border size="small" style="width: 100%">
-              <el-table-column prop="accessoryName" label="配件名称" min-width="160" />
-              <el-table-column prop="model" label="型号" min-width="160" />
-              <el-table-column prop="quantity" label="需求数量" width="120" align="center" />
+            <el-table
+              :data="group.items"
+              border
+              size="small"
+              :row-class-name="detailRowClassName"
+              style="width: 100%"
+            >
+              <el-table-column label="配件名称" min-width="160">
+                <template #default="{ row }">
+                  {{ row.accessoryName }}
+                  <el-tag v-if="row.accessoryDeleted" type="danger" size="small" effect="dark">已删除</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="model" label="型号" min-width="140" />
+              <el-table-column prop="quantity" label="需求数量" width="100" align="center" />
+              <el-table-column label="现存量" width="100" align="center">
+                <template #default="{ row }">
+                  <span v-if="row.accessoryDeleted" class="deleted-hint">-</span>
+                  <span :class="{ 'shortage-text': isDetailRowShort(row) }">{{ row.stockQuantity ?? 0 }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="缺口" width="90" align="center">
+                <template #default="{ row }">
+                  <span v-if="row.accessoryDeleted" class="deleted-hint">不可核销</span>
+                  <span :class="{ 'shortage-text': isDetailRowShort(row) }">{{ detailGap(row) }}</span>
+                </template>
+              </el-table-column>
             </el-table>
           </div>
         </div>
       </template>
       <template #footer>
         <el-button @click="detailDialogVisible = false">关闭</el-button>
+        <el-button
+          v-if="currentPlan"
+          type="warning"
+          :disabled="!canWriteoff(currentPlan) || writeoffLoading"
+          :loading="writeoffLoading"
+          @click="handleWriteoff(currentPlan)"
+        >
+          核销出库
+        </el-button>
       </template>
     </el-dialog>
   </div>
@@ -216,7 +299,8 @@ import {
   updateWiringPlan,
   deleteWiringPlan,
   updateWiringPlanStatus,
-  exportWiringPlans
+  exportWiringPlans,
+  writeoffWiringPlan
 } from '@/api/wiringPlan'
 import { getAccessoryPage } from '@/api/accessory'
 
@@ -255,6 +339,61 @@ const formRules = {
 
 const detailDialogVisible = ref(false)
 const currentPlan = ref(null)
+// 核销请求进行中标记：请求未返回前重复点击直接忽略，避免重复核销
+const writeoffLoading = ref(false)
+
+// 仅“启用、未核销、库存充足且不含已删除配件”的方案可核销出库
+const canWriteoff = (plan) => !!plan
+  && plan.status === 1
+  && !plan.writeoff
+  && !!plan.stockSufficient
+  && !plan.hasDeletedAccessory
+
+// 方案明细行是否库存不足（已核销方案不再标红，已删除配件单独走“不可核销”样式）
+const isDetailRowShort = (row) => {
+  if (!currentPlan.value || currentPlan.value.writeoff || row.accessoryDeleted) return false
+  return (row.stockQuantity ?? 0) < row.quantity
+}
+
+const detailGap = (row) => Math.max(0, row.quantity - (row.stockQuantity ?? 0))
+
+const detailRowClassName = ({ row }) => {
+  if (row.accessoryDeleted) return 'deleted-row'
+  return isDetailRowShort(row) ? 'shortage-row' : ''
+}
+
+const formatTime = (time) => {
+  if (!time) return ''
+  return String(time).replace('T', ' ').slice(0, 19)
+}
+
+const handleWriteoff = (row) => {
+  if (!canWriteoff(row)) {
+    return
+  }
+  ElMessageBox.confirm(
+    `确认按方案「${row.planName}」核销出库吗？将按明细需求数量一次性扣减配件现存量，核销后该方案不可重复核销、不可编辑。`,
+    '核销出库确认',
+    {
+      confirmButtonText: '确认核销',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  )
+    .then(async () => {
+      if (writeoffLoading.value) return
+      writeoffLoading.value = true
+      try {
+        await writeoffWiringPlan(row.id)
+        ElMessage.success('核销出库成功，现存量已扣减')
+        detailDialogVisible.value = false
+        await loadData()
+      } finally {
+        writeoffLoading.value = false
+      }
+    })
+    .catch(() => {})
+}
 
 const zoneGroups = computed(() => {
   if (!currentPlan.value?.details) return []
@@ -424,7 +563,7 @@ const handleView = async (row) => {
 }
 
 const handleDelete = (row) => {
-  ElMessageBox.confirm('确定要删除该布线方案吗？存在关联配件明细的方案无法删除。', '提示', {
+  ElMessageBox.confirm('确定要删除该布线方案吗？存在关联配件明细或已核销出库的方案无法删除。', '提示', {
     confirmButtonText: '确定',
     cancelButtonText: '取消',
     type: 'warning'
@@ -606,5 +745,28 @@ onMounted(() => {
 .zone-group-count {
   font-size: 13px;
   color: #909399;
+}
+
+.detail-alert {
+  margin-bottom: 16px;
+}
+
+.shortage-text {
+  color: #f56c6c;
+  font-weight: 700;
+}
+
+.deleted-hint {
+  color: #909399;
+  font-size: 12px;
+}
+
+:deep(.shortage-row) {
+  background-color: #fef0f0;
+}
+
+:deep(.deleted-row) {
+  color: #909399;
+  background-color: #f4f4f5;
 }
 </style>

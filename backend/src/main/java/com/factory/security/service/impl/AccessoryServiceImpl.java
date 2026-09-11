@@ -5,20 +5,14 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.factory.security.dto.AccessoryDTO;
 import com.factory.security.entity.Accessory;
-import com.factory.security.entity.WiringPlanDetail;
 import com.factory.security.mapper.AccessoryMapper;
-import com.factory.security.mapper.WiringPlanDetailMapper;
 import com.factory.security.service.AccessoryService;
 import org.springframework.beans.BeanUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 @Service
 public class AccessoryServiceImpl extends ServiceImpl<AccessoryMapper, Accessory> implements AccessoryService {
-
-    @Autowired
-    private WiringPlanDetailMapper wiringPlanDetailMapper;
 
     @Override
     public Page<Accessory> page(Integer pageNum, Integer pageSize, String keyword, Long zoneTagId) {
@@ -41,11 +35,7 @@ public class AccessoryServiceImpl extends ServiceImpl<AccessoryMapper, Accessory
 
     @Override
     public boolean add(AccessoryDTO dto) {
-        if (dto.getSpecMin() != null && dto.getSpecMax() != null) {
-            if (dto.getSpecMin().compareTo(dto.getSpecMax()) > 0) {
-                throw new RuntimeException("规格最小值不能大于最大值");
-            }
-        }
+        validateSpecRange(dto);
 
         Accessory accessory = new Accessory();
         BeanUtils.copyProperties(dto, accessory);
@@ -54,11 +44,7 @@ public class AccessoryServiceImpl extends ServiceImpl<AccessoryMapper, Accessory
 
     @Override
     public boolean update(AccessoryDTO dto) {
-        if (dto.getSpecMin() != null && dto.getSpecMax() != null) {
-            if (dto.getSpecMin().compareTo(dto.getSpecMax()) > 0) {
-                throw new RuntimeException("规格最小值不能大于最大值");
-            }
-        }
+        validateSpecRange(dto);
 
         Accessory accessory = new Accessory();
         BeanUtils.copyProperties(dto, accessory);
@@ -75,12 +61,15 @@ public class AccessoryServiceImpl extends ServiceImpl<AccessoryMapper, Accessory
 
     @Override
     public boolean delete(Long id) {
-        LambdaQueryWrapper<WiringPlanDetail> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(WiringPlanDetail::getAccessoryId, id);
-        long count = wiringPlanDetailMapper.selectCount(wrapper);
-        if (count > 0) {
-            throw new RuntimeException("该配件已被布线方案引用，无法删除，请先在相关方案中移除该配件");
-        }
+        // 软删除：已被方案引用的配件删除后仍在方案明细与缺口列表中展示，但不可再被新增方案选择或核销出库
         return removeById(id);
+    }
+
+    private void validateSpecRange(AccessoryDTO dto) {
+        if (dto.getSpecMin() != null && dto.getSpecMax() != null) {
+            if (dto.getSpecMin().compareTo(dto.getSpecMax()) > 0) {
+                throw new RuntimeException("规格最小值不能大于最大值");
+            }
+        }
     }
 }

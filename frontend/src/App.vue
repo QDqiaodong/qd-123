@@ -28,6 +28,10 @@
             <el-icon><Connection /></el-icon>
             <span>布线方案管理</span>
           </el-menu-item>
+          <el-menu-item index="/stock-gap">
+            <el-icon><Warning /></el-icon>
+            <span>库存缺口分析</span>
+          </el-menu-item>
         </el-menu>
       </el-aside>
       <el-main class="layout-main">

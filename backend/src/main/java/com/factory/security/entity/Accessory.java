@@ -2,6 +2,7 @@ package com.factory.security.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
@@ -31,6 +32,13 @@ public class Accessory implements Serializable {
     private String specUnit;
 
     private Long zoneTagId;
+
+    /** 现存量（库存数量），出库核销时按方案需求一次性扣减 */
+    private Integer stockQuantity;
+
+    /** 删除标记：0-正常，1-已删除。已删除配件在方案明细中保留展示但不可核销出库 */
+    @TableLogic
+    private Integer deleted;
 
     private String remark;
 

@@ -50,7 +50,8 @@ public class AccessoryController {
     }
 
     @PutMapping("/{id}/zone")
-    public Result<Void> updateZone(@PathVariable Long id, @RequestParam Long zoneTagId) {
+    public Result<Void> updateZone(@PathVariable Long id,
+                                   @RequestParam(required = false) Long zoneTagId) {
         accessoryService.updateZone(id, zoneTagId);
         return Result.success();
     }

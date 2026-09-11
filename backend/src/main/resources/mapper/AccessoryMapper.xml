@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.factory.security.mapper.AccessoryMapper">
+
+    <!-- 含已软删除配件：库存缺口列表据此保留展示被启用方案引用的已删除配件 -->
+    <select id="selectAllByIdsIncludingDeleted" resultType="com.factory.security.entity.Accessory">
+        SELECT id, accessory_name, model, material, scene, spec_min, spec_max, spec_unit,
+               zone_tag_id, stock_quantity, deleted, remark, create_time, update_time
+        FROM accessory
+        WHERE id IN
+        <foreach collection="ids" item="accessoryId" open="(" separator="," close=")">
+            #{accessoryId}
+        </foreach>
+    </select>
+</mapper>

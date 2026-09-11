@@ -22,6 +22,12 @@ const routes = [
     name: 'WiringPlan',
     component: () => import('@/views/WiringPlanList.vue'),
     meta: { title: '布线方案管理' }
+  },
+  {
+    path: '/stock-gap',
+    name: 'StockGap',
+    component: () => import('@/views/StockGapList.vue'),
+    meta: { title: '库存缺口分析' }
   }
 ]
 

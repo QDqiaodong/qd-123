@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.factory.security.dto.WiringPlanDTO;
 import com.factory.security.entity.WiringPlan;
+import com.factory.security.vo.StockGapVO;
 import com.factory.security.vo.WiringPlanExportRowVO;
 import com.factory.security.vo.WiringPlanVO;
 
@@ -29,4 +30,17 @@ public interface WiringPlanService extends IService<WiringPlan> {
      * 没有配件的方案输出一条仅含方案信息的占位行，空筛选结果返回空列表。
      */
     List<WiringPlanExportRowVO> listExportRows(String keyword, Integer status);
+
+    /**
+     * 库存缺口列表：一个配件一行，需求合计只统计“已启用且未核销”方案；
+     * 现存量不足时 shortage=true（前端标红），未分配分区单独成组，已删除配件仍展示但不可核销。
+     * 与方案明细、配件档案共用同一套库存数据，刷新后三处保持一致。
+     */
+    List<StockGapVO> listStockGaps();
+
+    /**
+     * 按方案核销出库：校验方案启用、未核销过、无已删除配件、现存量充足后，
+     * 在同一事务内逐条扣减配件现存量并写入核销记录。同一方案不可重复核销。
+     */
+    boolean writeoff(Long id);
 }

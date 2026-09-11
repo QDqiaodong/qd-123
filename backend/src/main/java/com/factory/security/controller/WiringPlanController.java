@@ -5,6 +5,7 @@ import com.factory.security.dto.Result;
 import com.factory.security.dto.WiringPlanDTO;
 import com.factory.security.service.WiringPlanService;
 import com.factory.security.util.CsvExporter;
+import com.factory.security.vo.StockGapVO;
 import com.factory.security.vo.WiringPlanExportRowVO;
 import com.factory.security.vo.WiringPlanVO;
 import jakarta.servlet.http.HttpServletResponse;
@@ -81,6 +82,25 @@ public class WiringPlanController {
     @GetMapping("/{id}")
     public Result<WiringPlanVO> getById(@PathVariable Long id) {
         return Result.success(wiringPlanService.getDetailById(id));
+    }
+
+    /**
+     * 库存缺口列表：需求合计只统计已启用且未核销的方案。
+     * 必须声明在 /{id} 之前，避免 stock-gaps 被当作方案 ID 匹配
+     */
+    @GetMapping("/stock-gaps")
+    public Result<List<StockGapVO>> listStockGaps() {
+        return Result.success(wiringPlanService.listStockGaps());
+    }
+
+    /**
+     * 按方案核销出库：扣减配件现存量并登记核销记录；
+     * 停用方案、已核销方案、含已删除配件或现存量不足时返回明确错误
+     */
+    @PutMapping("/{id}/writeoff")
+    public Result<Void> writeoff(@PathVariable Long id) {
+        wiringPlanService.writeoff(id);
+        return Result.success();
     }
 
     @PostMapping

@@ -69,7 +69,12 @@
             <el-tag v-if="getZoneTagName(row.zoneTagId)" type="primary" effect="light">
               {{ getZoneTagName(row.zoneTagId) }}
             </el-tag>
-            <span v-else>未分配</span>
+            <el-tag v-else type="warning" effect="plain">未分配</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="现存量" min-width="120" align="center">
+          <template #default="{ row }">
+            <span :class="{ 'stock-zero': !row.stockQuantity }">{{ row.stockQuantity ?? 0 }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="createTime" label="创建时间" width="180" align="center" />
@@ -147,7 +152,12 @@
           </el-col>
         </el-row>
         <el-form-item label="所属分区" prop="zoneTagId">
-          <el-select v-model="formData.zoneTagId" placeholder="请选择所属分区" style="width: 100%">
+          <el-select
+            v-model="formData.zoneTagId"
+            placeholder="可暂不分配分区"
+            clearable
+            style="width: 100%"
+          >
             <el-option
               v-for="item in zoneTagList"
               :key="item.id"
@@ -155,6 +165,17 @@
               :value="item.id"
             />
           </el-select>
+        </el-form-item>
+        <el-form-item label="现存量" prop="stockQuantity">
+          <el-input-number
+            v-model="formData.stockQuantity"
+            :min="0"
+            :precision="0"
+            :step="1"
+            style="width: 200px"
+            placeholder="库房现存数量"
+          />
+          <span class="form-hint">用于与已启用方案的需求合计比对库存缺口</span>
         </el-form-item>
         <el-form-item label="备注" prop="remark">
           <el-input v-model="formData.remark" type="textarea" :rows="3" placeholder="请输入备注" />
@@ -178,7 +199,7 @@
           <span v-else>未分配</span>
         </el-form-item>
         <el-form-item label="目标分区">
-          <el-select v-model="targetZoneId" placeholder="请选择目标分区" style="width: 100%">
+          <el-select v-model="targetZoneId" placeholder="请选择目标分区" clearable style="width: 100%">
             <el-option
               v-for="item in zoneTagList"
               :key="item.id"
@@ -186,6 +207,7 @@
               :value="item.id"
             />
           </el-select>
+          <div class="form-hint">清空选择后确定即设为未分配分区，未分配分区的配件会在缺口列表中单独列出</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -236,13 +258,14 @@ const formData = reactive({
   specMax: null,
   specUnit: '',
   zoneTagId: null,
+  stockQuantity: 0,
   remark: ''
 })
 
 const formRules = {
   accessoryName: [{ required: true, message: '请输入配件名称', trigger: 'blur' }],
   model: [{ required: true, message: '请输入型号', trigger: 'blur' }],
-  zoneTagId: [{ required: true, message: '请选择所属分区', trigger: 'change' }]
+  stockQuantity: [{ required: true, message: '请输入现存量', trigger: 'change' }]
 }
 
 const zoneDialogVisible = ref(false)
@@ -302,11 +325,15 @@ const handleEdit = (row) => {
 }
 
 const handleDelete = (row) => {
-  ElMessageBox.confirm('确定要删除该配件档案吗？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning'
-  })
+  ElMessageBox.confirm(
+    '删除后该配件将从配件档案中隐藏；若仍被布线方案引用，会在方案明细与缺口列表中显示为“配件已删除”，且不可核销出库。确定删除吗？',
+    '提示',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  )
     .then(async () => {
       await deleteAccessory(row.id)
       ElMessage.success('删除成功')
@@ -351,6 +378,7 @@ const resetForm = () => {
   formData.specMax = null
   formData.specUnit = ''
   formData.zoneTagId = null
+  formData.stockQuantity = 0
   formData.remark = ''
   formRef.value?.clearValidate()
 }
@@ -362,12 +390,9 @@ const handleChangeZone = (row) => {
 }
 
 const handleZoneSubmit = async () => {
-  if (!targetZoneId.value) {
-    ElMessage.warning('请选择目标分区')
-    return
-  }
-  await updateAccessoryZone(currentRow.value.id, targetZoneId.value)
-  ElMessage.success('分区调整成功')
+  // targetZoneId 为空时传 null，后端将该配件置为未分配分区
+  await updateAccessoryZone(currentRow.value.id, targetZoneId.value ?? null)
+  ElMessage.success(targetZoneId.value ? '分区调整成功' : '已设为未分配分区')
   zoneDialogVisible.value = false
   loadData()
 }
@@ -413,5 +438,16 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+.stock-zero {
+  color: #f56c6c;
+  font-weight: 600;
+}
+
+.form-hint {
+  margin-left: 12px;
+  font-size: 12px;
+  color: #909399;
 }
 </style>

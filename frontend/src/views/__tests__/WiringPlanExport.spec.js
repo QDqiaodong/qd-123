@@ -16,6 +16,8 @@ vi.mock('@/api/wiringPlan', () => ({
   updateWiringPlan: vi.fn(),
   deleteWiringPlan: vi.fn(),
   updateWiringPlanStatus: vi.fn(),
+  writeoffWiringPlan: vi.fn(),
+  getStockGaps: vi.fn(),
   exportWiringPlans: vi.fn()
 }))
 

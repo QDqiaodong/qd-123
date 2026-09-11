@@ -56,3 +56,19 @@ export function exportWiringPlans(params) {
     timeout: 60000
   })
 }
+
+// 库存缺口列表：需求合计只统计已启用且未核销方案，与配件档案、方案明细同一口径
+export function getStockGaps() {
+  return request({
+    url: '/wiring-plan/stock-gaps',
+    method: 'get'
+  })
+}
+
+// 按方案核销出库：扣减配件现存量，同一方案不可重复核销
+export function writeoffWiringPlan(id) {
+  return request({
+    url: `/wiring-plan/${id}/writeoff`,
+    method: 'put'
+  })
+}

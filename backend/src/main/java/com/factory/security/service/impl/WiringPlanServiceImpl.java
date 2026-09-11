@@ -6,32 +6,40 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.factory.security.dto.WiringPlanDTO;
 import com.factory.security.dto.WiringPlanDetailDTO;
 import com.factory.security.entity.Accessory;
+import com.factory.security.entity.StockWriteoff;
 import com.factory.security.entity.WiringPlan;
 import com.factory.security.entity.WiringPlanDetail;
 import com.factory.security.entity.ZoneTag;
 import com.factory.security.mapper.AccessoryMapper;
+import com.factory.security.mapper.StockWriteoffMapper;
 import com.factory.security.mapper.WiringPlanDetailMapper;
 import com.factory.security.mapper.WiringPlanMapper;
 import com.factory.security.mapper.ZoneTagMapper;
 import com.factory.security.service.WiringPlanService;
+import com.factory.security.vo.StockGapVO;
 import com.factory.security.vo.WiringPlanDetailVO;
 import com.factory.security.vo.WiringPlanExportRowVO;
 import com.factory.security.vo.WiringPlanVO;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringPlan> implements WiringPlanService {
@@ -45,16 +53,36 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
     @Autowired
     private ZoneTagMapper zoneTagMapper;
 
+    @Autowired
+    private StockWriteoffMapper stockWriteoffMapper;
+
     @Override
     public Page<WiringPlanVO> page(Integer pageNum, Integer pageSize, String keyword, Integer status) {
         Page<WiringPlan> page = new Page<>(pageNum, pageSize);
         Page<WiringPlan> planPage = page(page, buildFilterWrapper(keyword, status));
 
+        List<WiringPlan> plans = planPage.getRecords();
+        // 批量装配核销记录、明细与库存，避免逐方案查询；与缺口列表共用同一套统计口径
+        Map<Long, StockWriteoff> writeoffMap = listWriteoffsByPlanIds(
+                plans.stream().map(WiringPlan::getId).collect(Collectors.toList()));
+        Map<Long, List<WiringPlanDetail>> detailsByPlan = listDetailsByPlanIds(
+                plans.stream().map(WiringPlan::getId).collect(Collectors.toList()));
+        Set<Long> detailAccessoryIds = detailsByPlan.values().stream()
+                .flatMap(List::stream)
+                .map(WiringPlanDetail::getAccessoryId)
+                .collect(Collectors.toSet());
+        Map<Long, Accessory> accessoryMap = detailAccessoryIds.isEmpty()
+                ? Collections.emptyMap()
+                : accessoryMapper.selectBatchIds(detailAccessoryIds).stream()
+                        .collect(Collectors.toMap(Accessory::getId, Function.identity()));
+
         Page<WiringPlanVO> voPage = new Page<>(planPage.getCurrent(), planPage.getSize(), planPage.getTotal());
-        List<WiringPlanVO> voList = planPage.getRecords().stream().map(plan -> {
+        List<WiringPlanVO> voList = plans.stream().map(plan -> {
             WiringPlanVO vo = new WiringPlanVO();
             BeanUtils.copyProperties(plan, vo);
-            vo.setDetailCount(countDetails(plan.getId()));
+            List<WiringPlanDetail> details = detailsByPlan.getOrDefault(plan.getId(), Collections.emptyList());
+            vo.setDetailCount(details.size());
+            applyWriteoffInfo(vo, plan, details, writeoffMap.get(plan.getId()), accessoryMap);
             return vo;
         }).collect(Collectors.toList());
         voPage.setRecords(voList);
@@ -74,6 +102,26 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
         List<WiringPlanDetailVO> details = listDetailVOs(id);
         vo.setDetails(details);
         vo.setDetailCount(details.size());
+
+        // 核销状态与库存充足性与列表、缺口列表保持同一口径，刷新后三处一致
+        StockWriteoff writeoff = getWriteoffByPlanId(id);
+        Set<Long> existingAccessoryIds = details.stream()
+                .filter(d -> !Boolean.TRUE.equals(d.getAccessoryDeleted()))
+                .map(WiringPlanDetailVO::getAccessoryId)
+                .collect(Collectors.toSet());
+        Map<Long, Accessory> accessoryMap = existingAccessoryIds.isEmpty()
+                ? Collections.emptyMap()
+                : accessoryMapper.selectBatchIds(existingAccessoryIds).stream()
+                        .collect(Collectors.toMap(Accessory::getId, Function.identity()));
+        List<WiringPlanDetail> rawDetails = details.stream().map(d -> {
+            WiringPlanDetail raw = new WiringPlanDetail();
+            raw.setId(d.getId());
+            raw.setPlanId(d.getPlanId());
+            raw.setAccessoryId(d.getAccessoryId());
+            raw.setQuantity(d.getQuantity());
+            return raw;
+        }).collect(Collectors.toList());
+        applyWriteoffInfo(vo, plan, rawDetails, writeoff, accessoryMap);
         return vo;
     }
 
@@ -98,6 +146,10 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
         if (dto.getId() == null || getById(dto.getId()) == null) {
             throw new RuntimeException("布线方案不存在");
         }
+        if (getWriteoffByPlanId(dto.getId()) != null) {
+            // 已核销出库的方案已实际扣减库存，修改明细会破坏库存账实一致
+            throw new RuntimeException("该方案已核销出库，不可修改，如需调整请新建方案");
+        }
         validateDetails(dto.getDetails());
 
         WiringPlan plan = new WiringPlan();
@@ -114,6 +166,10 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
 
     @Override
     public boolean delete(Long id) {
+        if (getWriteoffByPlanId(id) != null) {
+            // 已核销出库的方案是库存扣减凭证，不可删除
+            throw new RuntimeException("该方案已核销出库，核销记录需保留，无法删除");
+        }
         int count = countDetails(id);
         if (count > 0) {
             throw new RuntimeException("该方案存在关联配件明细，无法直接删除，请先移除方案内的配件明细");
@@ -166,7 +222,7 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
 
         Set<Long> zoneTagIds = accessoryMap.values().stream()
                 .map(Accessory::getZoneTagId)
-                .filter(java.util.Objects::nonNull)
+                .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
         Map<Long, ZoneTag> zoneTagMap = zoneTagIds.isEmpty()
                 ? Collections.emptyMap()
@@ -182,8 +238,135 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
         return rows;
     }
 
+    // -------------------- 库存缺口与核销出库 --------------------
+
+    @Override
+    public List<StockGapVO> listStockGaps() {
+        // 需求合计口径：只统计已启用且未核销的方案；停用方案、已核销方案不参与合计
+        List<WiringPlan> activePlans = list(new LambdaQueryWrapper<WiringPlan>()
+                .eq(WiringPlan::getStatus, 1));
+        Set<Long> writtenOffPlanIds = listWriteoffsByPlanIds(
+                activePlans.stream().map(WiringPlan::getId).collect(Collectors.toList())).keySet();
+        List<Long> countingPlanIds = activePlans.stream()
+                .map(WiringPlan::getId)
+                .filter(planId -> !writtenOffPlanIds.contains(planId))
+                .collect(Collectors.toList());
+
+        Map<Long, Integer> requiredMap = sumRequiredQuantity(countingPlanIds);
+
+        // 正常配件全部列出（无需求则需求合计为 0）；另需带上被参与合计的方案引用的已删除配件
+        List<Accessory> activeAccessories = accessoryMapper.selectList(new LambdaQueryWrapper<>());
+        Set<Long> presentIds = activeAccessories.stream().map(Accessory::getId).collect(Collectors.toSet());
+        List<Long> missingReferencedIds = requiredMap.keySet().stream()
+                .filter(accessoryId -> !presentIds.contains(accessoryId))
+                .collect(Collectors.toList());
+        List<Accessory> deletedAccessories = missingReferencedIds.isEmpty()
+                ? Collections.emptyList()
+                : accessoryMapper.selectAllByIdsIncludingDeleted(missingReferencedIds);
+        // 极端情况下配件物理缺失（自定义 SQL 仍查不到）时仍保留一行占位，保证缺口列表与方案明细一致
+        Set<Long> loadedDeletedIds = deletedAccessories.stream().map(Accessory::getId).collect(Collectors.toSet());
+        missingReferencedIds.stream()
+                .filter(accessoryId -> !loadedDeletedIds.contains(accessoryId))
+                .map(accessoryId -> {
+                    Accessory placeholder = new Accessory();
+                    placeholder.setId(accessoryId);
+                    placeholder.setAccessoryName("配件已删除");
+                    placeholder.setStockQuantity(0);
+                    return placeholder;
+                })
+                .forEach(deletedAccessories::add);
+
+        Map<Long, ZoneTag> zoneTagMap = loadZoneTagMap(
+                Stream.concat(activeAccessories.stream(), deletedAccessories.stream())
+                        .map(Accessory::getZoneTagId)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toSet()));
+
+        List<StockGapVO> rows = new ArrayList<>();
+        Stream.concat(activeAccessories.stream(), deletedAccessories.stream())
+                .map(accessory -> buildGapVO(accessory, requiredMap, zoneTagMap))
+                .forEach(rows::add);
+
+        // 排序与方案明细/导出一致：分区排序号升序、同分区按配件名称、未分配分区最后
+        rows.sort(Comparator
+                .comparingLong((StockGapVO row) -> {
+                    if (Boolean.TRUE.equals(row.getUnassignedZone())) {
+                        return Long.MAX_VALUE;
+                    }
+                    ZoneTag zoneTag = row.getZoneTagId() == null ? null : zoneTagMap.get(row.getZoneTagId());
+                    return zoneTag != null && zoneTag.getSortOrder() != null
+                            ? zoneTag.getSortOrder() : Long.MAX_VALUE;
+                })
+                .thenComparing(row -> {
+                    ZoneTag zoneTag = row.getZoneTagId() == null ? null : zoneTagMap.get(row.getZoneTagId());
+                    return zoneTag != null && zoneTag.getTagName() != null ? zoneTag.getTagName() : "";
+                })
+                .thenComparing(row -> row.getAccessoryName() != null ? row.getAccessoryName() : "")
+                .thenComparing(StockGapVO::getAccessoryId, Comparator.nullsLast(Comparator.naturalOrder())));
+        return rows;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean writeoff(Long id) {
+        WiringPlan plan = getById(id);
+        if (plan == null) {
+            throw new RuntimeException("布线方案不存在或已被删除");
+        }
+        if (plan.getStatus() == null || plan.getStatus() != 1) {
+            // 停用方案不参与需求合计，自然也不能核销出库
+            throw new RuntimeException("停用状态的方案不可核销出库，请先启用方案");
+        }
+        if (getWriteoffByPlanId(id) != null) {
+            throw new RuntimeException("该方案已核销出库，同一方案不可重复核销");
+        }
+
+        List<WiringPlanDetail> details = wiringPlanDetailMapper.selectList(
+                new LambdaQueryWrapper<WiringPlanDetail>().eq(WiringPlanDetail::getPlanId, id));
+        if (details.isEmpty()) {
+            throw new RuntimeException("该方案没有配件明细，无法核销出库");
+        }
+
+        Map<Long, Accessory> accessoryMap = accessoryMapper.selectBatchIds(
+                        details.stream().map(WiringPlanDetail::getAccessoryId).collect(Collectors.toSet())).stream()
+                .collect(Collectors.toMap(Accessory::getId, Function.identity()));
+
+        for (WiringPlanDetail detail : details) {
+            Accessory accessory = accessoryMap.get(detail.getAccessoryId());
+            // 已删除配件仍在明细中展示，但不允许据此核销
+            if (accessory == null) {
+                throw new RuntimeException("方案包含已删除的配件，无法核销，请先调整方案明细");
+            }
+            int stock = accessory.getStockQuantity() == null ? 0 : accessory.getStockQuantity();
+            if (stock < detail.getQuantity()) {
+                throw new RuntimeException(String.format(
+                        "配件「%s」现存量不足（现存 %d，需求 %d），无法核销出库，请补充库存或调整方案",
+                        accessory.getAccessoryName(), stock, detail.getQuantity()));
+            }
+        }
+
+        // 条件更新扣减库存：行级条件防止并发核销把库存扣成负数；任一明细失败则整体回滚
+        for (WiringPlanDetail detail : details) {
+            int affected = accessoryMapper.deductStock(detail.getAccessoryId(), detail.getQuantity());
+            if (affected != 1) {
+                throw new RuntimeException("配件现存量已变动且不足出库，请刷新缺口列表后重试");
+            }
+        }
+
+        StockWriteoff writeoff = new StockWriteoff();
+        writeoff.setPlanId(id);
+        writeoff.setPlanName(plan.getPlanName());
+        try {
+            stockWriteoffMapper.insert(writeoff);
+        } catch (DuplicateKeyException e) {
+            // 并发下另一请求已核销同一方案，交由事务回滚库存扣减
+            throw new RuntimeException("该方案已核销出库，同一方案不可重复核销");
+        }
+        return true;
+    }
+
     /**
-     * 构造与分页列表一致的筛选条件：关键词模糊匹配方案名称/适用场景，启用状态精确匹配，
+     * 构造筛选条件：关键词模糊匹配方案名称/适用场景，启用状态精确匹配，
      * 方案按创建时间倒序排列，保证导出的方案顺序与列表一致
      */
     private LambdaQueryWrapper<WiringPlan> buildFilterWrapper(String keyword, Integer status) {
@@ -297,12 +480,13 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
         Set<Long> accessoryIds = details.stream()
                 .map(WiringPlanDetail::getAccessoryId)
                 .collect(Collectors.toSet());
+        // 逻辑删除的配件不会被 selectBatchIds 查出，明细行保留并以兜底文案展示
         Map<Long, Accessory> accessoryMap = accessoryMapper.selectBatchIds(accessoryIds).stream()
                 .collect(Collectors.toMap(Accessory::getId, Function.identity()));
 
         Set<Long> zoneTagIds = accessoryMap.values().stream()
                 .map(Accessory::getZoneTagId)
-                .filter(java.util.Objects::nonNull)
+                .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
         Map<Long, ZoneTag> zoneTagMap = zoneTagIds.isEmpty()
                 ? Collections.emptyMap()
@@ -322,13 +506,17 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
                 vo.setModel(accessory.getModel());
                 vo.setSpecUnit(accessory.getSpecUnit());
                 vo.setZoneTagId(accessory.getZoneTagId());
+                vo.setStockQuantity(accessory.getStockQuantity());
+                vo.setAccessoryDeleted(false);
                 ZoneTag zoneTag = zoneTagMap.get(accessory.getZoneTagId());
                 if (zoneTag != null) {
                     vo.setZoneTagName(zoneTag.getTagName());
                 }
             } else {
-                // 配件已被删除：与导出一致给出明确兜底文案，分区留空由前端归入“未分配分区”
+                // 配件已被删除：与导出一致给出明确兜底文案，分区留空由前端归入“未分配分区”；
+                // 已删除配件仍显示但不可核销出库
                 vo.setAccessoryName("配件已删除");
+                vo.setAccessoryDeleted(true);
             }
             return vo;
         }).collect(Collectors.toList());
@@ -369,5 +557,120 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
             detail.setQuantity(dto.getQuantity());
             wiringPlanDetailMapper.insert(detail);
         }
+    }
+
+    // -------------------- 核销/缺口装配辅助方法 --------------------
+
+    private StockWriteoff getWriteoffByPlanId(Long planId) {
+        return stockWriteoffMapper.selectOne(new LambdaQueryWrapper<StockWriteoff>()
+                .eq(StockWriteoff::getPlanId, planId)
+                .last("LIMIT 1"));
+    }
+
+    private Map<Long, StockWriteoff> listWriteoffsByPlanIds(Collection<Long> planIds) {
+        if (planIds == null || planIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return stockWriteoffMapper.selectList(new LambdaQueryWrapper<StockWriteoff>()
+                        .in(StockWriteoff::getPlanId, planIds)).stream()
+                .collect(Collectors.toMap(StockWriteoff::getPlanId, Function.identity(),
+                        (a, b) -> a, LinkedHashMap::new));
+    }
+
+    private Map<Long, List<WiringPlanDetail>> listDetailsByPlanIds(Collection<Long> planIds) {
+        if (planIds == null || planIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return wiringPlanDetailMapper.selectList(new LambdaQueryWrapper<WiringPlanDetail>()
+                        .in(WiringPlanDetail::getPlanId, planIds)).stream()
+                .collect(Collectors.groupingBy(WiringPlanDetail::getPlanId));
+    }
+
+    /**
+     * 按参与合计的方案集合汇总每个配件的需求数量
+     */
+    private Map<Long, Integer> sumRequiredQuantity(Collection<Long> countingPlanIds) {
+        if (countingPlanIds == null || countingPlanIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<Long, Integer> requiredMap = new LinkedHashMap<>();
+        List<WiringPlanDetail> details = wiringPlanDetailMapper.selectList(
+                new LambdaQueryWrapper<WiringPlanDetail>()
+                        .in(WiringPlanDetail::getPlanId, countingPlanIds));
+        for (WiringPlanDetail detail : details) {
+            requiredMap.merge(detail.getAccessoryId(), detail.getQuantity(), Integer::sum);
+        }
+        return requiredMap;
+    }
+
+    private Map<Long, ZoneTag> loadZoneTagMap(Set<Long> zoneTagIds) {
+        if (zoneTagIds == null || zoneTagIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return zoneTagMapper.selectBatchIds(zoneTagIds).stream()
+                .collect(Collectors.toMap(ZoneTag::getId, Function.identity()));
+    }
+
+    /**
+     * 填充方案 VO 的核销状态与库存充足性。库存充足性仅对“启用且未核销”的方案判定，
+     * 与缺口列表完全同一口径，保证刷新后方案列表、方案详情、缺口列表一致
+     */
+    private void applyWriteoffInfo(WiringPlanVO vo, WiringPlan plan, List<WiringPlanDetail> details,
+                                   StockWriteoff writeoff, Map<Long, Accessory> accessoryMap) {
+        vo.setWriteoff(writeoff != null);
+        vo.setWriteoffTime(writeoff != null ? writeoff.getCreateTime() : null);
+
+        boolean eligible = plan.getStatus() != null && plan.getStatus() == 1 && writeoff == null;
+        if (!eligible) {
+            vo.setStockSufficient(true);
+            vo.setHasDeletedAccessory(false);
+            return;
+        }
+        boolean hasDeleted = false;
+        boolean sufficient = true;
+        for (WiringPlanDetail detail : details) {
+            Accessory accessory = accessoryMap.get(detail.getAccessoryId());
+            if (accessory == null) {
+                hasDeleted = true;
+                sufficient = false;
+                continue;
+            }
+            int stock = accessory.getStockQuantity() == null ? 0 : accessory.getStockQuantity();
+            if (stock < detail.getQuantity()) {
+                sufficient = false;
+            }
+        }
+        vo.setHasDeletedAccessory(hasDeleted);
+        vo.setStockSufficient(sufficient);
+    }
+
+    private StockGapVO buildGapVO(Accessory accessory, Map<Long, Integer> requiredMap,
+                                  Map<Long, ZoneTag> zoneTagMap) {
+        StockGapVO vo = new StockGapVO();
+        vo.setAccessoryId(accessory.getId());
+        boolean deleted = accessory.getDeleted() != null && accessory.getDeleted() == 1;
+        boolean unassigned = accessory.getZoneTagId() == null
+                || zoneTagMap.get(accessory.getZoneTagId()) == null;
+        int stock = accessory.getStockQuantity() == null ? 0 : accessory.getStockQuantity();
+        int required = requiredMap.getOrDefault(accessory.getId(), 0);
+        int gap = Math.max(0, required - stock);
+
+        vo.setAccessoryName(accessory.getAccessoryName());
+        vo.setModel(accessory.getModel());
+        vo.setSpecUnit(accessory.getSpecUnit());
+        vo.setZoneTagId(accessory.getZoneTagId());
+        ZoneTag zoneTag = accessory.getZoneTagId() == null ? null : zoneTagMap.get(accessory.getZoneTagId());
+        if (zoneTag != null) {
+            vo.setZoneTagName(zoneTag.getTagName());
+        }
+        vo.setStockQuantity(stock);
+        vo.setRequiredQuantity(required);
+        // 已删除配件仅列示提示，不参与缺口标红与核销
+        vo.setGapQuantity(deleted ? 0 : gap);
+        vo.setShortage(!deleted && gap > 0);
+        vo.setUnassignedZone(unassigned);
+        vo.setAccessoryDeleted(deleted);
+        vo.setCreateTime(accessory.getCreateTime());
+        return vo;
     }
 }
