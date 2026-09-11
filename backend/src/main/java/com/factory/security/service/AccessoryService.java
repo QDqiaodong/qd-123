@@ -13,7 +13,11 @@ public interface AccessoryService extends IService<Accessory> {
 
     boolean update(AccessoryDTO dto);
 
-    boolean updateZone(Long id, Long zoneTagId);
+    /**
+     * 调整配件所属分区：校验配件存在且未删除、原因非空、目标分区与当前分区不同后，
+     * 在同一事务内更新配件分区并写入一条调区流水（原分区、目标分区、原因、时间）。
+     */
+    boolean adjustZone(Long id, Long zoneTagId, String reason);
 
     boolean delete(Long id);
 }

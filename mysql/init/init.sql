@@ -158,6 +158,28 @@ CREATE TABLE IF NOT EXISTS `stock_writeoff` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='方案出库核销记录表';
 
 -- ----------------------------
+-- 配件分区调整流水表（幂等建表）
+-- 每次通过“调整分区”操作都写一条流水：原分区、目标分区、调整原因、时间；
+-- 配件档案当前所属分区以最近一条流水为准，刷新后二者必须一致
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `zone_adjust_log` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `accessory_id` bigint NOT NULL COMMENT '配件ID',
+  `accessory_name` varchar(200) NOT NULL COMMENT '配件名称（调整时快照）',
+  `from_zone_tag_id` bigint DEFAULT NULL COMMENT '原分区标签ID，NULL 表示原未分配分区',
+  `from_zone_name` varchar(100) DEFAULT NULL COMMENT '原分区名称（调整时快照）',
+  `to_zone_tag_id` bigint DEFAULT NULL COMMENT '目标分区标签ID，NULL 表示调整为未分配分区',
+  `to_zone_name` varchar(100) DEFAULT NULL COMMENT '目标分区名称（调整时快照）',
+  `reason` varchar(500) NOT NULL COMMENT '调整原因',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '调整时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_accessory_id` (`accessory_id`),
+  KEY `idx_from_zone` (`from_zone_tag_id`),
+  KEY `idx_to_zone` (`to_zone_tag_id`),
+  KEY `idx_create_time` (`create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='配件分区调整流水表';
+
+-- ----------------------------
 -- 初始化布线方案数据（幂等插入，按唯一键 plan_name 去重）
 -- ----------------------------
 INSERT IGNORE INTO `wiring_plan` (`id`, `plan_name`, `scene`, `description`, `status`) VALUES
