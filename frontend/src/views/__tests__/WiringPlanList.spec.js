@@ -10,6 +10,7 @@ import {
   writeoffWiringPlan
 } from '@/api/wiringPlan'
 import { getAccessoryPage } from '@/api/accessory'
+import { notifyStockChanged, __resetStockListenersForTests } from '@/utils/stockSync'
 
 vi.mock('@/api/wiringPlan', () => ({
   getWiringPlanPage: vi.fn(),
@@ -82,6 +83,11 @@ const switchOf = (wrapper, planId) => {
   expect(row, `未找到方案 ${planId} 所在行`).toBeTruthy()
   return row.find('.el-switch')
 }
+
+// 清空库存变更订阅，避免前序用例未卸载组件的残留监听触发额外重拉
+beforeEach(() => {
+  __resetStockListenersForTests()
+})
 
 describe('布线方案列表 - 状态开关', () => {
   beforeEach(() => {
@@ -457,6 +463,86 @@ describe('布线方案 - 核销出库', () => {
       .findAll('.el-dialog button')
       .filter((b) => b.text().includes('核销出库'))[0]
     expect(footerBtn.attributes('disabled')).toBeDefined()
+
+    wrapper.unmount()
+  })
+})
+
+describe('布线方案列表 - 库存变更联动', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const stockTagOf = (wrapper, planName) => {
+    const row = wrapper
+      .findAll('.el-table__row')
+      .find((r) => r.text().includes(planName))
+    return row.findAll('.el-tag').find((t) =>
+      ['库存充足', '库存不足'].includes(t.text().trim()))
+  }
+
+  it('配件档案保存现存量后，列表库存校验立即按新现存量重算', async () => {
+    getWiringPlanPage.mockResolvedValue({
+      records: [
+        {
+          id: 2,
+          planName: '库存不足方案',
+          scene: '机房布线',
+          detailCount: 1,
+          status: 1,
+          writeoff: false,
+          stockSufficient: false,
+          hasDeletedAccessory: false,
+          createTime: '2026-09-02 10:00:00'
+        }
+      ],
+      total: 1
+    })
+    getAccessoryPage.mockResolvedValue({ records: [], total: 0 })
+    const wrapper = mount(WiringPlanList, {
+      global: { plugins: [ElementPlus], components: { ...Icons } }
+    })
+    await flushPromises()
+    expect(stockTagOf(wrapper, '库存不足方案').text()).toContain('库存不足')
+
+    // 配件档案补齐库存后：方案变为库存充足，无需点进详情
+    getWiringPlanPage.mockResolvedValueOnce({
+      records: [
+        {
+          id: 2,
+          planName: '库存不足方案',
+          scene: '机房布线',
+          detailCount: 1,
+          status: 1,
+          writeoff: false,
+          stockSufficient: true,
+          hasDeletedAccessory: false,
+          createTime: '2026-09-02 10:00:00'
+        }
+      ],
+      total: 1
+    })
+    notifyStockChanged('accessory')
+    await flushPromises()
+
+    expect(getWiringPlanPage).toHaveBeenCalledTimes(2)
+    expect(stockTagOf(wrapper, '库存不足方案').text()).toContain('库存充足')
+
+    wrapper.unmount()
+  })
+
+  it('本页发起的变更通知不触发重复拉取', async () => {
+    getWiringPlanPage.mockResolvedValue({ records: [], total: 0 })
+    getAccessoryPage.mockResolvedValue({ records: [], total: 0 })
+    const wrapper = mount(WiringPlanList, {
+      global: { plugins: [ElementPlus], components: { ...Icons } }
+    })
+    await flushPromises()
+    expect(getWiringPlanPage).toHaveBeenCalledTimes(1)
+
+    notifyStockChanged('wiring-plan')
+    await flushPromises()
+    expect(getWiringPlanPage).toHaveBeenCalledTimes(1)
 
     wrapper.unmount()
   })

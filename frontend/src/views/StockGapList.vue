@@ -101,9 +101,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Warning, Refresh } from '@element-plus/icons-vue'
 import { getStockGaps, getWiringPlanPage } from '@/api/wiringPlan'
+import { onStockChanged } from '@/utils/stockSync'
 
 const gaps = ref([])
 const loading = ref(false)
@@ -140,8 +141,30 @@ const loadGaps = async () => {
   }
 }
 
+// 配件档案保存现存量、分区调整或方案核销后，立即按新现存量重算缺口列表数字，
+// 不停留在保存前的需求合计/缺口上
+const handleStockChanged = () => {
+  loadGaps()
+}
+
+// bfcache 恢复（浏览器前进/后退）时组件不会重新挂载，主动重拉保证与真实库存一致
+const handlePageShow = (event) => {
+  if (event.persisted) {
+    loadGaps()
+  }
+}
+
+let unsubscribeStockChanged = null
+
 onMounted(() => {
   loadGaps()
+  unsubscribeStockChanged = onStockChanged(handleStockChanged)
+  window.addEventListener('pageshow', handlePageShow)
+})
+
+onBeforeUnmount(() => {
+  unsubscribeStockChanged?.()
+  window.removeEventListener('pageshow', handlePageShow)
 })
 </script>
 

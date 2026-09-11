@@ -4,6 +4,7 @@ import ElementPlus from 'element-plus'
 import * as Icons from '@element-plus/icons-vue'
 import StockGapList from '@/views/StockGapList.vue'
 import { getStockGaps, getWiringPlanPage } from '@/api/wiringPlan'
+import { notifyStockChanged, __resetStockListenersForTests } from '@/utils/stockSync'
 
 vi.mock('@/api/wiringPlan', () => ({
   getStockGaps: vi.fn(),
@@ -88,6 +89,7 @@ const mountPage = async () => {
 describe('库存缺口分析', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    __resetStockListenersForTests()
   })
 
   it('挂载时加载缺口列表', async () => {
@@ -157,6 +159,53 @@ describe('库存缺口分析', () => {
     expect(getStockGaps).toHaveBeenCalledTimes(2)
 
     wrapper.unmount()
+  })
+
+  it('配件档案保存现存量后立即按新现存量重算缺口数字', async () => {
+    const wrapper = await mountPage()
+    // 初次加载：RVV电源线现存 500、需求 600、缺口 100
+    const firstRow = () =>
+      wrapper.findAll('.el-table__row').find((r) => r.text().includes('RVV电源线'))
+    expect(firstRow().text()).toContain('100')
+
+    // 配件档案把现存量补到 700：缺口变为 0，不再标红
+    getStockGaps.mockResolvedValueOnce([
+      {
+        accessoryId: 100,
+        accessoryName: 'RVV电源线',
+        model: 'RVV-2*1.0',
+        specUnit: 'mm²',
+        zoneTagId: 2,
+        zoneTagName: '线缆布线区',
+        stockQuantity: 700,
+        requiredQuantity: 600,
+        gapQuantity: 0,
+        shortage: false,
+        unassignedZone: false,
+        accessoryDeleted: false
+      }
+    ])
+    notifyStockChanged('accessory')
+    await flushPromises()
+
+    expect(getStockGaps).toHaveBeenCalledTimes(2)
+    const row = firstRow()
+    expect(row.text()).toContain('700')
+    expect(row.text()).toContain('600')
+    expect(row.text()).toContain('0')
+    expect(row.classes()).not.toContain('shortage-row')
+
+    wrapper.unmount()
+  })
+
+  it('页面卸载后不再响应库存变更通知', async () => {
+    const wrapper = await mountPage()
+    wrapper.unmount()
+
+    notifyStockChanged('accessory')
+    await flushPromises()
+
+    expect(getStockGaps).toHaveBeenCalledTimes(1)
   })
 
   it('全部已分配分区时展示空状态', async () => {

@@ -290,7 +290,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Plus, Connection, Download } from '@element-plus/icons-vue'
 import {
@@ -304,6 +304,7 @@ import {
   writeoffWiringPlan
 } from '@/api/wiringPlan'
 import { getAccessoryPage } from '@/api/accessory'
+import { onStockChanged, notifyStockChanged } from '@/utils/stockSync'
 
 const tableData = ref([])
 const accessoryList = ref([])
@@ -389,6 +390,8 @@ const handleWriteoff = (row) => {
         ElMessage.success('核销出库成功，现存量已扣减')
         detailDialogVisible.value = false
         await loadData()
+        // 核销已实际扣减现存量：通知缺口页按新现存量重算需求合计与缺口数字
+        notifyStockChanged('wiring-plan')
       } finally {
         writeoffLoading.value = false
       }
@@ -674,9 +677,32 @@ const resetForm = () => {
   formRef.value?.clearValidate()
 }
 
+let unsubscribeStockChanged = null
+
+// 现存量变化（配件档案保存、核销出库等）后立即按最新库存重算列表“库存校验”，
+// 不停留在上一次加载的“充足/不足”结果上；本页发起的变更已自行 loadData，跳过避免重复拉取
+const handleStockChanged = (source) => {
+  if (source === 'wiring-plan') return
+  loadData()
+}
+
+// bfcache 恢复（浏览器前进/后退）时组件不会重新挂载，主动重拉避免展示旧库存校验
+const handlePageShow = (event) => {
+  if (event.persisted) {
+    loadData()
+  }
+}
+
 onMounted(() => {
   loadAccessoryList()
   loadData()
+  unsubscribeStockChanged = onStockChanged(handleStockChanged)
+  window.addEventListener('pageshow', handlePageShow)
+})
+
+onBeforeUnmount(() => {
+  unsubscribeStockChanged?.()
+  window.removeEventListener('pageshow', handlePageShow)
 })
 </script>
 

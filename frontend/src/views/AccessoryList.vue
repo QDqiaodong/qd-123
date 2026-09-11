@@ -230,6 +230,7 @@ import {
   updateAccessoryZone
 } from '@/api/accessory'
 import { getZoneTagList } from '@/api/zoneTag'
+import { notifyStockChanged } from '@/utils/stockSync'
 
 const tableData = ref([])
 const zoneTagList = ref([])
@@ -320,7 +321,8 @@ const handleAdd = () => {
 }
 
 const handleEdit = (row) => {
-  Object.assign(formData, row)
+  // 拷贝行数据而非直接引用表格行，避免编辑过程中改动列表行内容
+  Object.assign(formData, { ...row })
   dialogVisible.value = true
 }
 
@@ -338,6 +340,8 @@ const handleDelete = (row) => {
       await deleteAccessory(row.id)
       ElMessage.success('删除成功')
       loadData()
+      // 配件软删除后，方案明细与缺口页需按“配件已删除”口径重算
+      notifyStockChanged('accessory')
     })
     .catch(() => {})
 }
@@ -362,6 +366,8 @@ const handleSubmit = async () => {
 
   dialogVisible.value = false
   loadData()
+  // 现存量已变化：立即通知方案列表库存校验与缺口页按新现存量重算
+  notifyStockChanged('accessory')
 }
 
 const handleDialogClosed = () => {
@@ -395,6 +401,8 @@ const handleZoneSubmit = async () => {
   ElMessage.success(targetZoneId.value ? '分区调整成功' : '已设为未分配分区')
   zoneDialogVisible.value = false
   loadData()
+  // 分区变化会改变缺口页的分区分组与“未分配分区”统计，同步通知重算
+  notifyStockChanged('accessory')
 }
 
 onMounted(() => {
