@@ -186,6 +186,11 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
         if (existing == null) {
             throw new RuntimeException("布线方案不存在或已被删除");
         }
+        if (getWriteoffByPlanId(id) != null) {
+            // 已核销出库的方案是库存扣减凭证：停用会让其从启用筛选的列表与导出中消失，
+            // 对账时与已扣减的库存对不上，故启用状态锁定不可变更
+            throw new RuntimeException("该方案已核销出库，现存量已扣减，不可变更启用状态");
+        }
         WiringPlan plan = new WiringPlan();
         plan.setId(id);
         plan.setStatus(status);

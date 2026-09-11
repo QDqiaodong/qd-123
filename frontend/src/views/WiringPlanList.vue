@@ -76,6 +76,7 @@
               :active-value="1"
               :inactive-value="0"
               :loading="row.statusLoading"
+              :before-change="() => guardStatusChange(row)"
               @change="(val) => handleStatusChange(row, val)"
             />
           </template>
@@ -574,6 +575,16 @@ const handleDelete = (row) => {
       loadData()
     })
     .catch(() => {})
+}
+
+// 已核销出库的方案是库存扣减凭证，开关不可再拨：误操作时明确提示并拒绝切换，
+// 避免停用后按启用筛选的列表与导出漏掉该笔已出库凭证，对账与库存对不上
+const guardStatusChange = (row) => {
+  if (row.writeoff) {
+    ElMessage.warning('该方案已核销出库，现存量已扣减，不可变更启用状态')
+    return false
+  }
+  return true
 }
 
 const handleStatusChange = async (row, val) => {

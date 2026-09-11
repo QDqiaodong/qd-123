@@ -180,6 +180,45 @@ class WiringPlanServiceImplTest {
         assertEquals(1, captor.getAllValues().get(2).getStatus());
     }
 
+    @Test
+    void disableWrittenOffPlanRejected() {
+        // 已核销出库的方案现存量已扣减，停用会让其从启用筛选的列表与导出中消失，对账与库存对不上
+        when(baseMapper.selectById(1L)).thenReturn(existingPlan(1L, 1));
+        when(stockWriteoffMapper.selectOne(any())).thenReturn(buildWriteoff(1L));
+
+        RuntimeException e = assertThrows(RuntimeException.class,
+                () -> wiringPlanService.updateStatus(1L, 0));
+
+        assertEquals("该方案已核销出库，现存量已扣减，不可变更启用状态", e.getMessage());
+        verify(baseMapper, never()).updateById(any(WiringPlan.class));
+    }
+
+    @Test
+    void enableWrittenOffPlanRejected() {
+        // 已核销方案启用状态锁定，两个方向均不可变更
+        when(baseMapper.selectById(1L)).thenReturn(existingPlan(1L, 1));
+        when(stockWriteoffMapper.selectOne(any())).thenReturn(buildWriteoff(1L));
+
+        RuntimeException e = assertThrows(RuntimeException.class,
+                () -> wiringPlanService.updateStatus(1L, 1));
+
+        assertEquals("该方案已核销出库，现存量已扣减，不可变更启用状态", e.getMessage());
+        verify(baseMapper, never()).updateById(any(WiringPlan.class));
+    }
+
+    @Test
+    void notWrittenOffPlanStatusChangeUnaffected() {
+        // 未核销方案正常走核销记录查询后放行，确认新增的校验不影响原有切换
+        when(baseMapper.selectById(1L)).thenReturn(existingPlan(1L, 1));
+        when(stockWriteoffMapper.selectOne(any())).thenReturn(null);
+        when(baseMapper.updateById(any(WiringPlan.class))).thenReturn(1);
+
+        boolean result = wiringPlanService.updateStatus(1L, 0);
+
+        assertTrue(result);
+        verify(baseMapper).updateById(any(WiringPlan.class));
+    }
+
     // -------------------- 导出当前筛选结果 --------------------
 
     private WiringPlan buildPlan(Long id, String name, String scene, Integer status, String createTime) {

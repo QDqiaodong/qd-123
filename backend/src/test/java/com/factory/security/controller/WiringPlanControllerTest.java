@@ -70,6 +70,18 @@ class WiringPlanControllerTest {
     }
 
     @Test
+    void writtenOffPlanStatusChangeReturnsClearError() throws Exception {
+        // 已核销出库的方案启用状态锁定，停用请求返回明确错误，前端开关恢复原状态
+        when(wiringPlanService.updateStatus(1L, 0))
+                .thenThrow(new RuntimeException("该方案已核销出库，现存量已扣减，不可变更启用状态"));
+
+        mockMvc.perform(put("/wiring-plan/1/status").param("status", "0"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(500))
+                .andExpect(jsonPath("$.message").value("该方案已核销出库，现存量已扣减，不可变更启用状态"));
+    }
+
+    @Test
     void rapidConsecutiveTogglesAllSucceed() throws Exception {
         // 连续快速切换：启用 -> 停用 -> 启用，每次请求都应正常处理
         when(wiringPlanService.updateStatus(eq(1L), anyInt())).thenReturn(true);

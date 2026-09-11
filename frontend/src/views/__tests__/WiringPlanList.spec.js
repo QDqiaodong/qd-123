@@ -359,6 +359,27 @@ describe('布线方案 - 核销出库', () => {
     wrapper.unmount()
   })
 
+  it('已核销方案：启用状态开关不可拨动，误操作时明确提示且不调用接口', async () => {
+    const wrapper = await mountStockPage()
+    const row = wrapper
+      .findAll('.el-table__row')
+      .find((r) => r.text().includes('已核销方案'))
+    const sw = row.find('.el-switch')
+    // 已核销方案当前为启用状态
+    expect(sw.classes()).toContain('is-checked')
+
+    await sw.trigger('click')
+    await flushPromises()
+
+    // 开关保持原状态，不发起状态变更请求，并给出明确提示
+    expect(sw.classes()).toContain('is-checked')
+    expect(updateWiringPlanStatus).not.toHaveBeenCalled()
+    expect(ElMessage.warning).toHaveBeenCalledWith('该方案已核销出库，现存量已扣减，不可变更启用状态')
+    expect(ElMessage.success).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+  })
+
   it('停用方案不展示库存不足，核销按钮禁用', async () => {
     const rows = [
       {
