@@ -8,7 +8,9 @@ import com.factory.security.mapper.AccessoryMapper;
 import com.factory.security.mapper.WiringPlanDetailMapper;
 import com.factory.security.mapper.WiringPlanMapper;
 import com.factory.security.mapper.ZoneTagMapper;
+import com.factory.security.vo.WiringPlanDetailVO;
 import com.factory.security.vo.WiringPlanExportRowVO;
+import com.factory.security.vo.WiringPlanVO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,6 +25,7 @@ import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -337,5 +340,110 @@ class WiringPlanServiceImplTest {
         assertEquals("", rows.get(0).getSpecUnit());
         assertEquals("3", rows.get(0).getQuantityText());
         assertEquals("停用", rows.get(0).getStatusText());
+    }
+
+    // -------------------- 详情页分区排序 --------------------
+
+    /**
+     * 数据库以乱序返回明细：分区排序号升序；排序号相同的分区按分区名区分先后；
+     * 同分区内按配件名称排序；未分配分区与已删除配件排最后
+     */
+    @Test
+    void detailSortedByZoneSortOrderThenAccessoryName() {
+        WiringPlan plan = buildPlan(1L, "厂区外围监控布线方案", "厂区外围监控", 1, "2026-09-02T10:00:00");
+        when(baseMapper.selectById(1L)).thenReturn(plan);
+
+        // 模拟编辑后重插/刷新导致的乱序返回
+        when(wiringPlanDetailMapper.selectList(any())).thenReturn(Arrays.asList(
+                buildDetail(13L, 1L, 999L, 3),
+                buildDetail(11L, 1L, 101L, 12),
+                buildDetail(10L, 1L, 100L, 600),
+                buildDetail(15L, 1L, 104L, 40),
+                buildDetail(12L, 1L, 102L, 300),
+                buildDetail(14L, 1L, 103L, 800)
+        ));
+        // 配件 999 已被删除，批量查询查不到
+        when(accessoryMapper.selectBatchIds(any())).thenReturn(Arrays.asList(
+                buildAccessory(100L, "RVV电源线", "mm²", 2L),
+                buildAccessory(103L, "六类网线", "mm", 2L),
+                buildAccessory(101L, "防爆摄像头", "MP", 5L),
+                buildAccessory(104L, "PVC线管", "mm", 6L),
+                buildAccessory(102L, "扎带", "mm", null)
+        ));
+        // 监控设备区与弱电配管区排序号重复（均为 5）
+        when(zoneTagMapper.selectBatchIds(any())).thenReturn(Arrays.asList(
+                buildZone(2L, "线缆布线区", 2),
+                buildZone(5L, "监控设备区", 5),
+                buildZone(6L, "弱电配管区", 5)
+        ));
+
+        WiringPlanVO vo = wiringPlanService.getDetailById(1L);
+
+        assertEquals(6, vo.getDetailCount());
+        assertEquals(6, vo.getDetails().size());
+        assertEquals(
+                Arrays.asList("RVV电源线", "六类网线", "PVC线管", "防爆摄像头", "配件已删除", "扎带"),
+                vo.getDetails().stream().map(WiringPlanDetailVO::getAccessoryName)
+                        .collect(java.util.stream.Collectors.toList()));
+        assertEquals(
+                Arrays.asList("线缆布线区", "线缆布线区", "弱电配管区", "监控设备区", null, null),
+                vo.getDetails().stream().map(WiringPlanDetailVO::getZoneTagName)
+                        .collect(java.util.stream.Collectors.toList()));
+
+        // 已删除配件：保留明细行并给出兜底文案，分区为空由前端归入“未分配分区”
+        WiringPlanDetailVO deletedRow = vo.getDetails().get(4);
+        assertEquals(999L, deletedRow.getAccessoryId());
+        assertNull(deletedRow.getZoneTagId());
+        assertNull(deletedRow.getZoneTagName());
+    }
+
+    @Test
+    void detailWithNoDetailsReturnsEmptyList() {
+        // 空分区场景：方案没有任何配件明细
+        WiringPlan plan = buildPlan(2L, "暂无配件的方案", null, 1, "2026-09-03T10:00:00");
+        when(baseMapper.selectById(2L)).thenReturn(plan);
+        when(wiringPlanDetailMapper.selectList(any())).thenReturn(Collections.emptyList());
+
+        WiringPlanVO vo = wiringPlanService.getDetailById(2L);
+
+        assertEquals(0, vo.getDetailCount());
+        assertTrue(vo.getDetails().isEmpty());
+        verify(accessoryMapper, never()).selectBatchIds(any());
+        verify(zoneTagMapper, never()).selectBatchIds(any());
+    }
+
+    @Test
+    void detailOrderIsConsistentWithExportOrder() {
+        // 同一份数据，详情接口与导出接口的配件顺序必须一致
+        WiringPlan plan = buildPlan(1L, "厂区外围监控布线方案", "厂区外围监控", 1, "2026-09-02T10:00:00");
+        when(baseMapper.selectById(1L)).thenReturn(plan);
+        when(baseMapper.selectList(any())).thenReturn(Collections.singletonList(plan));
+        when(wiringPlanDetailMapper.selectList(any())).thenReturn(Arrays.asList(
+                buildDetail(13L, 1L, 999L, 3),
+                buildDetail(11L, 1L, 101L, 12),
+                buildDetail(10L, 1L, 100L, 600),
+                buildDetail(12L, 1L, 102L, 300),
+                buildDetail(14L, 1L, 103L, 800)
+        ));
+        when(accessoryMapper.selectBatchIds(any())).thenReturn(Arrays.asList(
+                buildAccessory(100L, "RVV电源线", "mm²", 2L),
+                buildAccessory(103L, "六类网线", "mm", 2L),
+                buildAccessory(101L, "防爆摄像头", "MP", 5L),
+                buildAccessory(102L, "扎带", "mm", null)
+        ));
+        when(zoneTagMapper.selectBatchIds(any())).thenReturn(Arrays.asList(
+                buildZone(2L, "线缆布线区", 2),
+                buildZone(5L, "监控设备区", 5)
+        ));
+
+        List<String> exportOrder = wiringPlanService.listExportRows(null, null).stream()
+                .map(WiringPlanExportRowVO::getAccessoryName)
+                .collect(java.util.stream.Collectors.toList());
+        List<String> detailOrder = wiringPlanService.getDetailById(1L).getDetails().stream()
+                .map(WiringPlanDetailVO::getAccessoryName)
+                .collect(java.util.stream.Collectors.toList());
+
+        assertEquals(exportOrder, detailOrder);
+        assertEquals(Arrays.asList("RVV电源线", "六类网线", "防爆摄像头", "配件已删除", "扎带"), detailOrder);
     }
 }

@@ -309,7 +309,11 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
                 : zoneTagMapper.selectBatchIds(zoneTagIds).stream()
                         .collect(Collectors.toMap(ZoneTag::getId, Function.identity()));
 
-        return details.stream().map(detail -> {
+        // 与导出共用同一套分区排序：分区排序号升序、同分区按配件名称、未分配分区最后，
+        // 避免刷新或编辑后详情页分组顺序依赖数据库返回顺序而与导出结果不一致
+        List<WiringPlanDetail> sortedDetails = sortDetailsByZone(details, accessoryMap, zoneTagMap);
+
+        return sortedDetails.stream().map(detail -> {
             WiringPlanDetailVO vo = new WiringPlanDetailVO();
             BeanUtils.copyProperties(detail, vo);
             Accessory accessory = accessoryMap.get(detail.getAccessoryId());
@@ -322,6 +326,9 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
                 if (zoneTag != null) {
                     vo.setZoneTagName(zoneTag.getTagName());
                 }
+            } else {
+                // 配件已被删除：与导出一致给出明确兜底文案，分区留空由前端归入“未分配分区”
+                vo.setAccessoryName("配件已删除");
             }
             return vo;
         }).collect(Collectors.toList());

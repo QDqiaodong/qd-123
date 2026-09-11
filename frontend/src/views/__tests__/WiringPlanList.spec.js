@@ -5,6 +5,7 @@ import * as Icons from '@element-plus/icons-vue'
 import WiringPlanList from '@/views/WiringPlanList.vue'
 import {
   getWiringPlanPage,
+  getWiringPlanById,
   updateWiringPlanStatus
 } from '@/api/wiringPlan'
 import { getAccessoryPage } from '@/api/accessory'
@@ -175,5 +176,72 @@ describe('布线方案列表 - 状态开关', () => {
     expect(updateWiringPlanStatus).toHaveBeenCalledTimes(2)
     expect(updateWiringPlanStatus).toHaveBeenLastCalledWith(1, 1)
     expect(ElMessage.success).toHaveBeenCalledWith('已启用')
+  })
+})
+
+describe('布线方案详情 - 分区分组展示', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // 后端按分区排序号升序、同分区按配件名称排序后的返回结果
+  const detailPlan = () => ({
+    id: 1,
+    planName: '厂区外围监控布线方案',
+    scene: '厂区外围监控',
+    status: 1,
+    createTime: '2026-09-01 10:00:00',
+    description: null,
+    detailCount: 5,
+    details: [
+      { id: 10, accessoryId: 100, accessoryName: 'RVV电源线', model: 'RVV-2×1.0', quantity: 600, zoneTagId: 2, zoneTagName: '线缆布线区' },
+      { id: 14, accessoryId: 103, accessoryName: '六类网线', model: 'CAT6', quantity: 800, zoneTagId: 2, zoneTagName: '线缆布线区' },
+      { id: 11, accessoryId: 101, accessoryName: '防爆摄像头', model: 'FB-200', quantity: 12, zoneTagId: 5, zoneTagName: '监控设备区' },
+      { id: 13, accessoryId: 999, accessoryName: '配件已删除', model: null, quantity: 3, zoneTagId: null, zoneTagName: null },
+      { id: 12, accessoryId: 102, accessoryName: '扎带', model: 'ZD-100', quantity: 300, zoneTagId: null, zoneTagName: null }
+    ]
+  })
+
+  const openDetail = async (wrapper, plan) => {
+    getWiringPlanById.mockResolvedValue(plan)
+    const row = wrapper
+      .findAll('.el-table__row')
+      .find((r) => r.text().includes(plan.planName))
+    const viewBtn = row.findAll('button').find((b) => b.text().includes('详情'))
+    await viewBtn.trigger('click')
+    await flushPromises()
+  }
+
+  it('分区分组按后端返回顺序渲染，未分配分区在最后', async () => {
+    const wrapper = await mountPage()
+    await openDetail(wrapper, detailPlan())
+
+    // 分组顺序与后端排序结果一致：线缆布线区 -> 监控设备区 -> 未分配分区
+    const headers = wrapper.findAll('.zone-group-header .el-tag')
+      .map((el) => el.text().trim())
+    expect(headers).toEqual(['线缆布线区', '监控设备区', '未分配分区'])
+
+    // 同一分区内配件顺序与后端返回一致（按配件名称稳定排序）
+    const groups = wrapper.findAll('.zone-group')
+    const firstGroupNames = groups[0].findAll('tbody tr td:first-child')
+      .map((el) => el.text().trim())
+    expect(firstGroupNames).toEqual(['RVV电源线', '六类网线'])
+
+    // 已删除配件与未分配分区的配件归入最后一组，删除配件展示兜底文案
+    const lastGroupText = groups[2].text()
+    expect(lastGroupText).toContain('配件已删除')
+    expect(lastGroupText).toContain('扎带')
+
+    wrapper.unmount()
+  })
+
+  it('空明细方案展示空状态提示', async () => {
+    const wrapper = await mountPage()
+    await openDetail(wrapper, { ...detailPlan(), detailCount: 0, details: [] })
+
+    expect(wrapper.find('.zone-detail-section .el-empty').exists()).toBe(true)
+    expect(wrapper.findAll('.zone-group').length).toBe(0)
+
+    wrapper.unmount()
   })
 })
