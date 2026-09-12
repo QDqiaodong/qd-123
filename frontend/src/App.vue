@@ -32,6 +32,10 @@
             <el-icon><Warning /></el-icon>
             <span>库存缺口分析</span>
           </el-menu-item>
+          <el-menu-item index="/safety-stock">
+            <el-icon><Box /></el-icon>
+            <span>安全库存台账</span>
+          </el-menu-item>
           <el-menu-item index="/stock-check">
             <el-icon><DocumentChecked /></el-icon>
             <span>分区盘点</span>

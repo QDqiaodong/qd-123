@@ -72,9 +72,18 @@
             <el-tag v-else type="warning" effect="plain">未分配</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="现存量" min-width="120" align="center">
+        <el-table-column label="现存量" min-width="110" align="center">
           <template #default="{ row }">
             <span :class="{ 'stock-zero': !row.stockQuantity }">{{ row.stockQuantity ?? 0 }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="安全库存下限" min-width="130" align="center">
+          <template #default="{ row }">
+            <span v-if="row.safetyStock == null" class="safety-unset">未设置</span>
+            <span v-else :class="{ 'safety-low': isBelowSafety(row) }">
+              {{ row.safetyStock }}
+              <el-tag v-if="isBelowSafety(row)" type="danger" size="small" effect="plain">待补货</el-tag>
+            </span>
           </template>
         </el-table-column>
         <el-table-column prop="createTime" label="创建时间" width="180" align="center" />
@@ -177,6 +186,18 @@
           />
           <span class="form-hint">用于与已启用方案的需求合计比对库存缺口</span>
         </el-form-item>
+        <el-form-item label="安全库存下限" prop="safetyStock">
+          <el-input-number
+            v-model="formData.safetyStock"
+            :min="0"
+            :precision="0"
+            :step="1"
+            style="width: 200px"
+            placeholder="留空表示不设下限"
+          />
+          <el-button link type="info" @click="formData.safetyStock = null">清空（不设下限）</el-button>
+          <span class="form-hint">现存量低于下限时列入“安全库存台账”，留空则不监控</span>
+        </el-form-item>
         <el-form-item label="备注" prop="remark">
           <el-input v-model="formData.remark" type="textarea" :rows="3" placeholder="请输入备注" />
         </el-form-item>
@@ -260,6 +281,7 @@ const formData = reactive({
   specUnit: '',
   zoneTagId: null,
   stockQuantity: 0,
+  safetyStock: null,
   remark: ''
 })
 
@@ -298,6 +320,10 @@ const getZoneTagName = (id) => {
   const tag = zoneTagList.value.find(item => item.id === id)
   return tag ? tag.tagName : ''
 }
+
+// 现存量低于安全库存下限即“待补货”；未设下限（null/undefined）不监控
+const isBelowSafety = (row) =>
+  row.safetyStock != null && (row.stockQuantity ?? 0) < row.safetyStock
 
 const handleSearch = () => {
   pagination.pageNum = 1
@@ -374,7 +400,7 @@ const handleSubmit = async () => {
 
   dialogVisible.value = false
   loadData()
-  // 现存量已变化：立即通知方案列表库存校验与缺口页按新现存量重算
+  // 现存量或安全库存下限已变化：立即通知方案列表库存校验、缺口页与安全库存台账按最新数据重算
   notifyStockChanged('accessory')
 }
 
@@ -393,6 +419,7 @@ const resetForm = () => {
   formData.specUnit = ''
   formData.zoneTagId = null
   formData.stockQuantity = 0
+  formData.safetyStock = null
   formData.remark = ''
   formRef.value?.clearValidate()
 }
@@ -480,6 +507,18 @@ onBeforeUnmount(() => {
 .stock-zero {
   color: #f56c6c;
   font-weight: 600;
+}
+
+.safety-unset {
+  color: #909399;
+}
+
+.safety-low {
+  color: #f56c6c;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .form-hint {

@@ -21,6 +21,15 @@ public interface AccessoryMapper extends BaseMapper<Accessory> {
     int deductStock(@Param("id") Long id, @Param("quantity") Integer quantity);
 
     /**
+     * 显式更新可空列“安全库存下限”。
+     * MyBatis-Plus 默认 updateById 字段策略为 NOT_NULL，会把 null 字段直接忽略，
+     * 导致编辑配件时“清空下限（置为 NULL）”无法落库，故更新后按 DTO 值显式同步一次，
+     * 保证“设过下限后清空 = 不设下限、移出台账”确实生效。
+     */
+    @Update("UPDATE accessory SET safety_stock = #{safetyStock}, update_time = NOW() WHERE id = #{id}")
+    int updateSafetyStock(@Param("id") Long id, @Param("safetyStock") Integer safetyStock);
+
+    /**
      * 按 ID 批量查询配件（含已软删除的配件）。
      * 库存缺口列表需要把被启用方案引用的已删除配件一并列出（仍显示、不可核销），
      * MyBatis-Plus 逻辑删除会过滤内置 selectBatchIds，故使用自定义 SQL。

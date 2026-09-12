@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS `accessory` (
   `spec_unit` varchar(20) DEFAULT NULL COMMENT '规格单位',
   `zone_tag_id` bigint DEFAULT NULL COMMENT '所属分区标签ID',
   `stock_quantity` int NOT NULL DEFAULT 0 COMMENT '现存量（库存数量）',
+  `safety_stock` int DEFAULT NULL COMMENT '安全库存下限：NULL 表示未设下限，不进安全库存台账；非空且现存量低于该值即列入台账',
   `deleted` tinyint NOT NULL DEFAULT 0 COMMENT '删除标记：0-正常，1-已删除（软删除，仍可在方案明细中展示但不可核销）',
   `remark` varchar(500) DEFAULT NULL COMMENT '备注',
   `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -43,8 +44,8 @@ CREATE TABLE IF NOT EXISTS `accessory` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='安防配件档案表';
 
 -- ----------------------------
--- 旧数据卷结构迁移：幂等补充现存量与软删除字段
--- 全新数据卷建表时已包含这两列；旧卷通过存储过程判断 information_schema 后再 ADD COLUMN
+-- 旧数据卷结构迁移：幂等补充现存量、软删除与安全库存下限字段
+-- 全新数据卷建表时已包含这些列；旧卷通过存储过程判断 information_schema 后再 ADD COLUMN
 -- ----------------------------
 DROP PROCEDURE IF EXISTS `add_accessory_columns`;
 DELIMITER //
@@ -60,9 +61,16 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
                  WHERE TABLE_SCHEMA = DATABASE()
                    AND TABLE_NAME = 'accessory'
+                   AND COLUMN_NAME = 'safety_stock') THEN
+    ALTER TABLE `accessory`
+      ADD COLUMN `safety_stock` int DEFAULT NULL COMMENT '安全库存下限：NULL 未设下限' AFTER `stock_quantity`;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = 'accessory'
                    AND COLUMN_NAME = 'deleted') THEN
     ALTER TABLE `accessory`
-      ADD COLUMN `deleted` tinyint NOT NULL DEFAULT 0 COMMENT '删除标记：0-正常，1-已删除（软删除）' AFTER `stock_quantity`;
+      ADD COLUMN `deleted` tinyint NOT NULL DEFAULT 0 COMMENT '删除标记：0-正常，1-已删除（软删除）' AFTER `safety_stock`;
   END IF;
 END //
 DELIMITER ;
@@ -82,22 +90,24 @@ INSERT IGNORE INTO `zone_tag` (`tag_name`, `tag_code`, `sort_order`, `remark`) V
 -- ----------------------------
 -- 初始化配件数据（幂等插入，按唯一索引 model 去重，避免重复导入）
 -- 现存量按库房常备数量初始化，部分故意低于方案需求以体现库存缺口
+-- safety_stock 为安全库存下限：仅部分配件设置，留空（NULL）表示不设下限、不进安全库存台账；
+-- 部分设置项故意让现存量低于下限（如六类网线），以便台账直接体现采购缺口
 -- ----------------------------
 INSERT IGNORE INTO `accessory`
-  (`accessory_name`, `model`, `material`, `scene`, `spec_min`, `spec_max`, `spec_unit`, `zone_tag_id`, `stock_quantity`, `remark`)
+  (`accessory_name`, `model`, `material`, `scene`, `spec_min`, `spec_max`, `spec_unit`, `zone_tag_id`, `stock_quantity`, `safety_stock`, `remark`)
 VALUES
-('镀锌桥架', 'XQJ-C-200', '镀锌钢板', '弱电主干布线', 100, 500, 'mm', 1, 80, '标准弱电桥架'),
-('槽式桥架', 'XQJ-C-300', '冷轧钢板', '机房布线', 50, 600, 'mm', 1, 30, '机房专用槽式桥架'),
-('超五类网线', 'CAT5e-UTP', '铜芯', '网络布线', 0.5, 1.0, 'mm', 2, 1000, '非屏蔽双绞线'),
-('六类网线', 'CAT6-UTP', '铜芯', '千兆网络布线', 0.5, 1.5, 'mm', 2, 600, '千兆网线'),
-('RVV电源线', 'RVV-2*1.0', '铜芯', '设备供电', 0.5, 2.5, 'mm²', 2, 500, '两芯电源线'),
-('BNC接头', 'BNC-75-5', '铜镀金', '同轴视频连接', 5, 9, 'mm', 3, 200, '视频线接头'),
-('水晶头', 'RJ45-8P8C', '镀金', '网线终端', 0.5, 1.0, 'mm', 3, 80, '超五类水晶头'),
-('接线端子', 'UK-2.5', '铜', '线缆连接', 1.5, 4.0, 'mm²', 3, 500, '导轨式接线端子'),
-('扎带', 'ZD-4*200', '尼龙', '线缆绑扎', 100, 500, 'mm', 4, 400, '自锁式尼龙扎带'),
-('线卡', 'XK-10', 'PVC', '线缆固定', 5, 20, 'mm', 4, 150, '圆形线卡'),
-('防爆摄像头', 'DS-2CD3T46', '铝合金', '厂区外围监控', 2, 8, 'MP', 5, 12, '400万像素防爆摄像机'),
-('半球摄像机', 'DS-2CD3346', '塑料', '室内监控', 2, 6, 'MP', 5, 20, '400万像素半球摄像机');
+('镀锌桥架', 'XQJ-C-200', '镀锌钢板', '弱电主干布线', 100, 500, 'mm', 1, 80, 100, '标准弱电桥架'),
+('槽式桥架', 'XQJ-C-300', '冷轧钢板', '机房布线', 50, 600, 'mm', 1, 30, NULL, '机房专用槽式桥架'),
+('超五类网线', 'CAT5e-UTP', '铜芯', '网络布线', 0.5, 1.0, 'mm', 2, 1000, 800, '非屏蔽双绞线'),
+('六类网线', 'CAT6-UTP', '铜芯', '千兆网络布线', 0.5, 1.5, 'mm', 2, 600, 800, '千兆网线'),
+('RVV电源线', 'RVV-2*1.0', '铜芯', '设备供电', 0.5, 2.5, 'mm²', 2, 500, NULL, '两芯电源线'),
+('BNC接头', 'BNC-75-5', '铜镀金', '同轴视频连接', 5, 9, 'mm', 3, 200, 200, '视频线接头'),
+('水晶头', 'RJ45-8P8C', '镀金', '网线终端', 0.5, 1.0, 'mm', 3, 80, 100, '超五类水晶头'),
+('接线端子', 'UK-2.5', '铜', '线缆连接', 1.5, 4.0, 'mm²', 3, 500, NULL, '导轨式接线端子'),
+('扎带', 'ZD-4*200', '尼龙', '线缆绑扎', 100, 500, 'mm', 4, 400, 300, '自锁式尼龙扎带'),
+('线卡', 'XK-10', 'PVC', '线缆固定', 5, 20, 'mm', 4, 150, 200, '圆形线卡'),
+('防爆摄像头', 'DS-2CD3T46', '铝合金', '厂区外围监控', 2, 8, 'MP', 5, 12, 15, '400万像素防爆摄像机'),
+('半球摄像机', 'DS-2CD3346', '塑料', '室内监控', 2, 6, 'MP', 5, 20, NULL, '400万像素半球摄像机');
 
 -- 旧数据卷的存量配件在迁移补列后现存量为 0，按型号回填演示库存（仅对仍是 0 值的行生效，不覆盖人工调整或核销扣减后的结果）
 UPDATE `accessory` SET `stock_quantity` = 80   WHERE `model` = 'XQJ-C-200'  AND `stock_quantity` = 0;
@@ -112,6 +122,10 @@ UPDATE `accessory` SET `stock_quantity` = 400  WHERE `model` = 'ZD-4*200'   AND 
 UPDATE `accessory` SET `stock_quantity` = 150  WHERE `model` = 'XK-10'      AND `stock_quantity` = 0;
 UPDATE `accessory` SET `stock_quantity` = 12   WHERE `model` = 'DS-2CD3T46' AND `stock_quantity` = 0;
 UPDATE `accessory` SET `stock_quantity` = 20   WHERE `model` = 'DS-2CD3346' AND `stock_quantity` = 0;
+
+-- 安全库存下限刻意不做旧卷回填：NULL 同时表示“从未设置”与“人工清空”，回填会把用户主动清空的下限
+-- 重新写回、让本已移出台账的配件再次报警。旧卷补列后默认 NULL（不监控），由库房在档案中按需设置；
+-- 全新数据卷的 INSERT 数据已自带演示下限。
 
 -- ----------------------------
 -- 布线方案表（幂等建表）

@@ -36,6 +36,9 @@ public class Accessory implements Serializable {
     /** 现存量（库存数量），出库核销时按方案需求一次性扣减 */
     private Integer stockQuantity;
 
+    /** 安全库存下限：null 表示未设下限（不进安全库存台账）；非空且现存量低于该值即列入台账 */
+    private Integer safetyStock;
+
     /** 删除标记：0-正常，1-已删除。已删除配件在方案明细中保留展示但不可核销出库 */
     @TableLogic
     private Integer deleted;

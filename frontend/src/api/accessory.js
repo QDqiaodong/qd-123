@@ -45,3 +45,12 @@ export function updateAccessoryZone(id, zoneTagId) {
     params: { zoneTagId }
   })
 }
+
+// 安全库存台账：仅返回设了安全库存下限且现存量低于下限的配件（含未分配分区），
+// 未设下限/已删除/现存量不低于下限的不进台账；数据实时计算
+export function getSafetyStockShortages() {
+  return request({
+    url: '/accessory/safety-stock',
+    method: 'get'
+  })
+}

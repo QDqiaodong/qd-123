@@ -30,6 +30,12 @@ const routes = [
     meta: { title: '库存缺口分析' }
   },
   {
+    path: '/safety-stock',
+    name: 'SafetyStock',
+    component: () => import('@/views/SafetyStockList.vue'),
+    meta: { title: '安全库存台账' }
+  },
+  {
     path: '/stock-check',
     name: 'StockCheck',
     component: () => import('@/views/StockCheckList.vue'),

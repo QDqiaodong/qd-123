@@ -5,9 +5,12 @@ import com.factory.security.dto.AccessoryDTO;
 import com.factory.security.dto.Result;
 import com.factory.security.entity.Accessory;
 import com.factory.security.service.AccessoryService;
+import com.factory.security.vo.SafetyStockVO;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/accessory")
@@ -24,6 +27,16 @@ public class AccessoryController {
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Long zoneTagId) {
         return Result.success(accessoryService.page(pageNum, pageSize, keyword, zoneTagId));
+    }
+
+    /**
+     * 安全库存台账：仅列设了安全库存下限且现存量低于下限的正常配件（含未分配分区）。
+     * 必须声明在 /{id} 之前，避免 safety-stock 被当作配件 ID 匹配；
+     * 数据实时计算，响应统一 no-store，改下限或现存量后刷新即与档案一致。
+     */
+    @GetMapping("/safety-stock")
+    public Result<List<SafetyStockVO>> safetyStockShortages() {
+        return Result.success(accessoryService.listSafetyStockShortages());
     }
 
     @GetMapping("/{id}")

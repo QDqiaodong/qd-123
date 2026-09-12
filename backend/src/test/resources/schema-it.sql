@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS `accessory` (
   `spec_unit` varchar(20) DEFAULT NULL,
   `zone_tag_id` bigint DEFAULT NULL,
   `stock_quantity` int NOT NULL DEFAULT 0,
+  `safety_stock` int DEFAULT NULL,
   `deleted` tinyint NOT NULL DEFAULT 0,
   `remark` varchar(500) DEFAULT NULL,
   `create_time` datetime DEFAULT CURRENT_TIMESTAMP,

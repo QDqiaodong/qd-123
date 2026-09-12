@@ -38,5 +38,9 @@ public class AccessoryDTO {
     @Min(value = 0, message = "现存量不能为负数")
     private Integer stockQuantity;
 
+    /** 安全库存下限：留空表示不设下限（不进安全库存台账），设置后现存量低于下限即列入台账 */
+    @Min(value = 0, message = "安全库存下限不能为负数")
+    private Integer safetyStock;
+
     private String remark;
 }

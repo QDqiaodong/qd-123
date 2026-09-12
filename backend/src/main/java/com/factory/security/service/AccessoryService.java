@@ -4,6 +4,9 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.factory.security.dto.AccessoryDTO;
 import com.factory.security.entity.Accessory;
+import com.factory.security.vo.SafetyStockVO;
+
+import java.util.List;
 
 public interface AccessoryService extends IService<Accessory> {
 
@@ -16,4 +19,11 @@ public interface AccessoryService extends IService<Accessory> {
     boolean updateZone(Long id, Long zoneTagId);
 
     boolean delete(Long id);
+
+    /**
+     * 安全库存台账：仅返回未删除、已设安全库存下限且现存量低于下限的配件。
+     * 未设下限（null）、现存量不低于下限、已删除的配件不进台账；
+     * 未分配分区的低位配件同样列出。改下限或现存量后实时重算。
+     */
+    List<SafetyStockVO> listSafetyStockShortages();
 }
