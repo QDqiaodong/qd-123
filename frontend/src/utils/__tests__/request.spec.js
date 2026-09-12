@@ -70,6 +70,19 @@ describe('request 响应拦截器', () => {
     expect(ElMessage.error).not.toHaveBeenCalled()
   })
 
+  it('blob 请求在 HTTP 200 中返回 JSON 业务错误体时解析后端提示并拒绝', async () => {
+    // 全局异常处理器不改变 HTTP 状态码：待确认单导出被拒绝时为 200 + {code:500,...}
+    const response = {
+      config: { responseType: 'blob' },
+      headers: { 'content-type': 'application/json' },
+      data: new Blob([JSON.stringify({ code: 500, message: '待确认盘点单尚未回写库存，差异未定稿，请确认并回写后再导出差异明细' })], {
+        type: 'application/json'
+      })
+    }
+    await expect(handlers.onFulfilled(response)).rejects.toThrow('待确认盘点单尚未回写库存')
+    expect(ElMessage.error).toHaveBeenCalledWith('待确认盘点单尚未回写库存，差异未定稿，请确认并回写后再导出差异明细')
+  })
+
   it('blob 请求返回 JSON 错误体时解析后端提示', async () => {
     const error = {
       message: 'Request failed with status code 500',

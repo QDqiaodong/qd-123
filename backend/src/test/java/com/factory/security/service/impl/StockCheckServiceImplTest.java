@@ -445,4 +445,32 @@ class StockCheckServiceImplTest {
                 () -> stockCheckService.getDetailById(404L));
         assertTrue(ex.getMessage().contains("盘点单不存在"));
     }
+
+    @Test
+    void exportDetailAllowedForConfirmedCheck() {
+        StockCheck confirmed = pendingCheck(10L, 2L, "线缆布线区");
+        confirmed.setStatus(1);
+        when(baseMapper.selectById(10L)).thenReturn(confirmed);
+        when(stockCheckItemMapper.selectList(any())).thenReturn(Collections.singletonList(
+                item(1001L, 3L, "超五类网线", 1000, 980, 0)));
+        when(accessoryMapper.selectAllByIdsIncludingDeleted(any()))
+                .thenReturn(Collections.singletonList(accessory(3L, "超五类网线", 1000, 0)));
+
+        StockCheckDetailVO detail = stockCheckService.getConfirmedDetailForExport(10L);
+
+        assertEquals(1, detail.getDiffCount());
+        assertEquals(-20, detail.getTotalDiffQuantity());
+    }
+
+    @Test
+    void exportDetailRejectsPendingCheck() {
+        when(baseMapper.selectById(10L)).thenReturn(pendingCheck(10L, 2L, "线缆布线区"));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> stockCheckService.getConfirmedDetailForExport(10L));
+        assertTrue(ex.getMessage().contains("待确认"));
+        assertTrue(ex.getMessage().contains("确认并回写"));
+        // 待确认单拒绝导出时不加载明细
+        verify(stockCheckItemMapper, never()).selectList(any());
+    }
 }

@@ -6,11 +6,20 @@ import com.factory.security.dto.StockCheckConfirmDTO;
 import com.factory.security.dto.StockCheckCreateDTO;
 import com.factory.security.dto.StockCheckItemDTO;
 import com.factory.security.service.StockCheckService;
+import com.factory.security.util.CsvExporter;
 import com.factory.security.vo.StockCheckDetailVO;
+import com.factory.security.vo.StockCheckItemVO;
 import com.factory.security.vo.StockCheckVO;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
+
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 分区盘点：按分区开盘登记实盘数，待确认期间不改库存；
@@ -18,8 +27,13 @@ import org.springframework.web.bind.annotation.*;
  */
 @RestController
 @RequestMapping("/stock-check")
-@CrossOrigin
+@CrossOrigin(exposedHeaders = "Content-Disposition")
 public class StockCheckController {
+
+    /** 差异明细导出列：配件名称、账面数、实盘数、盈亏件数（盘盈为正、盘亏为负） */
+    private static final String[] DIFF_EXPORT_HEADERS = {
+            "配件名称", "账面数", "实盘数", "盈亏件数"
+    };
 
     @Autowired
     private StockCheckService stockCheckService;
@@ -42,6 +56,59 @@ public class StockCheckController {
     @GetMapping("/{id}")
     public Result<StockCheckDetailVO> getById(@PathVariable Long id) {
         return Result.success(stockCheckService.getDetailById(id));
+    }
+
+    /**
+     * 导出已确认盘点单的差异明细 CSV（UTF-8 BOM）。
+     * 只列盘盈/盘亏配件（已删除配件、账实一致配件不导出），列为
+     * 配件名称、账面数、实盘数、盈亏件数（盘盈带 +、盘亏带 -）；
+     * 无差异行（含空分区、全部一致）时仅导出表头；有差异行时末尾追加合计行，
+     * 合计与抽屉详情同一口径，刷新后与页面差异种数、盈亏件数一致。
+     * 待确认单拒绝导出并返回明确原因。文件名含中文，使用 RFC 5987 filename* 编码
+     */
+    @GetMapping("/{id}/diff-export")
+    public void exportDiff(@PathVariable Long id, HttpServletResponse response) throws IOException {
+        StockCheckDetailVO detail = stockCheckService.getConfirmedDetailForExport(id);
+
+        List<String[]> dataRows = new ArrayList<>();
+        for (StockCheckItemVO item : detail.getItems()) {
+            if (Boolean.TRUE.equals(item.getAccessoryDeleted()) || item.getDiffQuantity() == null
+                    || item.getDiffQuantity() == 0) {
+                // 已删除配件只展示不回写、账实一致项不属于差异明细
+                continue;
+            }
+            dataRows.add(new String[]{
+                    item.getAccessoryName(),
+                    String.valueOf(item.getBookQuantity()),
+                    String.valueOf(item.getActualQuantity()),
+                    formatSignedDiff(item.getDiffQuantity())
+            });
+        }
+        // 有差异行才追加合计行：差异种数与盈亏件数直接取详情汇总，
+        // 与页面抽屉的“差异种数/差异合计”同源，刷新后保持一致；无差异时文件只有表头
+        if (!dataRows.isEmpty()) {
+            int diffCount = detail.getDiffCount() == null ? 0 : detail.getDiffCount();
+            int totalDiffQuantity = detail.getTotalDiffQuantity() == null ? 0 : detail.getTotalDiffQuantity();
+            dataRows.add(new String[]{
+                    "合计（差异" + diffCount + "种）", "", "", formatSignedDiff(totalDiffQuantity)
+            });
+        }
+
+        String checkNo = detail.getHeader() == null ? String.valueOf(id) : detail.getHeader().getCheckNo();
+        String asciiFallback = "stock-check-diff-" + checkNo + ".csv";
+        String chineseFileName = "盘点差异明细_" + checkNo + ".csv";
+        String encodedFileName = URLEncoder.encode(chineseFileName, StandardCharsets.UTF_8).replace("+", "%20");
+
+        response.setContentType("text/csv; charset=UTF-8");
+        response.setCharacterEncoding("UTF-8");
+        response.setHeader("Content-Disposition",
+                "attachment; filename=\"" + asciiFallback + "\"; filename*=UTF-8''" + encodedFileName);
+        CsvExporter.write(response.getOutputStream(), DIFF_EXPORT_HEADERS, dataRows);
+    }
+
+    /** 盈亏件数：0 显示 0，正数带 +（盘盈），负数自带 -（盘亏） */
+    private String formatSignedDiff(int diffQuantity) {
+        return diffQuantity > 0 ? "+" + diffQuantity : String.valueOf(diffQuantity);
     }
 
     /** 按分区开盘；zoneTagId 不传（null）表示给未分配分区开盘，空分区也允许开盘 */

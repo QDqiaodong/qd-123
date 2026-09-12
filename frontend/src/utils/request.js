@@ -19,10 +19,32 @@ const readBlobAsText = (blob) => {
   })
 }
 
+// blob 请求也可能在 HTTP 200 中返回 JSON 业务错误体（全局异常处理器不改变状态码，
+// 如待确认盘点单导出被拒绝）：识别后提示后端原因并拒绝，避免把错误 JSON 当成 CSV 下载；
+// 非 JSON 或解析失败时按正常文件透传
+const handleJsonBlobResponse = async (response) => {
+  try {
+    const res = JSON.parse(await readBlobAsText(response.data))
+    if (res && res.code != null && res.code !== 200) {
+      const message = res.message || '导出失败'
+      ElMessage.error(message)
+      return Promise.reject(new Error(message))
+    }
+  } catch (e) {
+    // 非 JSON 内容按正常文件处理
+  }
+  return response
+}
+
 request.interceptors.response.use(
   response => {
-    // 文件下载等二进制响应直接返回原始 response，由调用方处理 Blob
+    // 文件下载等二进制响应直接返回原始 response，由调用方处理 Blob；
+    // 但若体是 JSON（HTTP 200 中的业务错误，code!=200），解析后按错误处理
     if (response.config?.responseType === 'blob') {
+      const blob = response.data
+      if (blob && typeof blob.type === 'string' && blob.type.includes('application/json')) {
+        return handleJsonBlobResponse(response)
+      }
       return response
     }
     const res = response.data

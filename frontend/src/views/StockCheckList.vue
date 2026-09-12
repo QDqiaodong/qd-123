@@ -236,8 +236,15 @@
             </el-button>
           </div>
         </div>
-        <div v-else-if="detail.header.confirmRemark" class="detail-footer readonly-footer">
-          <el-text type="info">确认备注：{{ detail.header.confirmRemark }}</el-text>
+        <div v-else class="detail-footer readonly-footer">
+          <el-text v-if="detail.header.confirmRemark" type="info">
+            确认备注：{{ detail.header.confirmRemark }}
+          </el-text>
+          <span v-else></span>
+          <el-button type="success" plain :loading="exporting" @click="handleExportDiff">
+            <el-icon><Download /></el-icon>
+            导出差异明细
+          </el-button>
         </div>
       </div>
     </el-drawer>
@@ -247,17 +254,19 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Plus, DocumentChecked } from '@element-plus/icons-vue'
+import { Search, Plus, DocumentChecked, Download } from '@element-plus/icons-vue'
 import {
   getStockCheckPage,
   getStockCheckById,
   createStockCheck,
   recordStockCheckItems,
   confirmStockCheck,
-  deleteStockCheck
+  deleteStockCheck,
+  exportStockCheckDiff
 } from '@/api/stockCheck'
 import { getZoneTagList } from '@/api/zoneTag'
 import { notifyStockChanged, onStockChanged } from '@/utils/stockSync'
+import { resolveExportFileName, triggerBrowserDownload } from '@/utils/csvDownload'
 
 const UNASSIGNED_LABEL = '未分配分区'
 // 分区筛选中“未分配分区”的前端占位值：后端真实 zoneTagId 为 null
@@ -287,6 +296,8 @@ const detail = ref(null)
 const detailLoading = ref(false)
 const saving = ref(false)
 const confirming = ref(false)
+// 导出进行中标记：请求未返回前重复点击直接忽略，避免重复下载
+const exporting = ref(false)
 // 抽屉内实盘录入值（itemId -> 数量），未登记为 null
 const actualMap = reactive({})
 // 是否有尚未“保存登记”的本地修改
@@ -507,6 +518,34 @@ const handleDelete = (row) => {
       loadData()
     })
     .catch(() => {})
+}
+
+// 导出已确认盘点单的差异明细：与抽屉详情同一口径，合计行与页面差异种数、盈亏件数一致；
+// 无差异（含空分区）时后端文件只有表头。待确认单前端先行拦截，后端也会拒绝并说明原因
+const handleExportDiff = async () => {
+  if (!detail.value) return
+  if (exporting.value) {
+    return
+  }
+  const header = detail.value.header
+  if (header.status !== 1) {
+    ElMessage.warning('待确认盘点单尚未回写库存，差异未定稿，请确认并回写后再导出差异明细')
+    return
+  }
+  exporting.value = true
+  try {
+    const response = await exportStockCheckDiff(header.id)
+    const fileName = resolveExportFileName(
+      response.headers['content-disposition'],
+      `盘点差异明细_${header.checkNo}.csv`
+    )
+    triggerBrowserDownload(response.data, fileName)
+    ElMessage.success('导出成功')
+  } catch (e) {
+    // 错误提示已由请求拦截器统一展示（含待确认单等业务拒绝原因）
+  } finally {
+    exporting.value = false
+  }
 }
 
 // 其他页面（如档案直接改了现存量）不改变待确认单的账面快照；

@@ -300,6 +300,17 @@ public class StockCheckServiceImpl extends ServiceImpl<StockCheckMapper, StockCh
         removeById(id);
     }
 
+    @Override
+    public StockCheckDetailVO getConfirmedDetailForExport(Long id) {
+        StockCheck check = getRequiredCheck(id);
+        if (check.getStatus() == null || check.getStatus() != 1) {
+            // 待确认单实盘数还能反复覆盖、差异未定稿，导出对账单据没有意义
+            throw new RuntimeException("待确认盘点单尚未回写库存，差异未定稿，请确认并回写后再导出差异明细");
+        }
+        // 详情装配口径与抽屉页面完全一致，保证导出合计行与页面差异种数、盈亏件数一致
+        return getDetailById(id);
+    }
+
     // -------------------- 辅助方法 --------------------
 
     private StockCheck getRequiredCheck(Long id) {

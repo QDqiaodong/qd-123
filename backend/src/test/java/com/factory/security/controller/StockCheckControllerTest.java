@@ -14,10 +14,16 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 
+import static org.hamcrest.Matchers.containsString;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -27,6 +33,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -52,6 +60,30 @@ class StockCheckControllerTest {
         vo.setRecordedCount(1);
         vo.setDiffCount(1);
         return vo;
+    }
+
+    private StockCheckVO confirmedVO() {
+        StockCheckVO vo = pendingVO();
+        vo.setStatus(1);
+        vo.setStatusText("已确认");
+        vo.setRecordedCount(2);
+        return vo;
+    }
+
+    private StockCheckItemVO diffItem(Long id, String name, int book, Integer actual, String diffType) {
+        StockCheckItemVO item = new StockCheckItemVO();
+        item.setId(id);
+        item.setAccessoryId(id);
+        item.setAccessoryName(name);
+        item.setBookQuantity(book);
+        item.setActualQuantity(actual);
+        item.setRecorded(true);
+        item.setAccessoryDeleted(false);
+        if (actual != null) {
+            item.setDiffQuantity(actual - book);
+        }
+        item.setDiffType(diffType);
+        return item;
     }
 
     @Test
@@ -182,5 +214,110 @@ class StockCheckControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200));
         verify(stockCheckService).delete(10L);
+    }
+
+    @Test
+    void diffExportWritesDiffRowsAndTotalRowWithChineseFileName() throws Exception {
+        StockCheckDetailVO detail = new StockCheckDetailVO();
+        detail.setHeader(confirmedVO());
+        StockCheckItemVO loss = diffItem(1001L, "超五类网线", 1000, 980, "loss");
+        StockCheckItemVO gain = diffItem(1002L, "六类网线", 600, 650, "gain");
+        StockCheckItemVO even = diffItem(1003L, "水晶头", 100, 100, "even");
+        StockCheckItemVO deleted = diffItem(1004L, "旧型号", 10, null, "deleted");
+        deleted.setAccessoryDeleted(true);
+        deleted.setRecorded(false);
+        detail.setItems(List.of(loss, gain, even, deleted));
+        detail.setRecordedCount(3);
+        detail.setDiffCount(2);
+        detail.setGainCount(1);
+        detail.setLossCount(1);
+        detail.setTotalDiffQuantity(30);
+        when(stockCheckService.getConfirmedDetailForExport(10L)).thenReturn(detail);
+
+        String expectedFileName = "盘点差异明细_PD20260912100000001.csv";
+        String expectedEncoded = URLEncoder.encode(expectedFileName, StandardCharsets.UTF_8).replace("+", "%20");
+
+        MvcResult result = mockMvc.perform(get("/stock-check/10/diff-export"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType("text/csv;charset=UTF-8"))
+                .andExpect(header().string("Content-Disposition",
+                        containsString("filename*=UTF-8''" + expectedEncoded)))
+                .andExpect(header().string("Content-Disposition",
+                        containsString("stock-check-diff-PD20260912100000001.csv")))
+                .andReturn();
+
+        byte[] body = result.getResponse().getContentAsByteArray();
+        // UTF-8 BOM，Excel 打开中文不乱码
+        assertEquals((byte) 0xEF, body[0]);
+        assertEquals((byte) 0xBB, body[1]);
+        assertEquals((byte) 0xBF, body[2]);
+
+        String csv = new String(body, StandardCharsets.UTF_8);
+        String[] lines = csv.split("\r\n");
+        assertEquals("配件名称,账面数,实盘数,盈亏件数", lines[0].substring(1));
+        // 只导出盘亏/盘盈行，账实一致与已删除配件不出现
+        assertEquals("超五类网线,1000,980,-20", lines[1]);
+        assertEquals("六类网线,600,650,+50", lines[2]);
+        // 合计行：差异种数与盈亏件数与详情页汇总一致
+        assertEquals("合计（差异2种）,,,+30", lines[3]);
+        assertEquals(4, lines.length);
+    }
+
+    @Test
+    void diffExportWithNoDiffWritesHeaderOnly() throws Exception {
+        StockCheckDetailVO detail = new StockCheckDetailVO();
+        detail.setHeader(confirmedVO());
+        // 全部账实一致：差异明细为空分区/无差异，导出只有表头，不追加合计行
+        detail.setItems(List.of(diffItem(1001L, "超五类网线", 1000, 1000, "even")));
+        detail.setRecordedCount(1);
+        detail.setDiffCount(0);
+        detail.setGainCount(0);
+        detail.setLossCount(0);
+        detail.setTotalDiffQuantity(0);
+        when(stockCheckService.getConfirmedDetailForExport(10L)).thenReturn(detail);
+
+        MvcResult result = mockMvc.perform(get("/stock-check/10/diff-export"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType("text/csv;charset=UTF-8"))
+                .andReturn();
+
+        String csv = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+        String[] lines = csv.split("\r\n");
+        assertTrue(lines[0].endsWith("配件名称,账面数,实盘数,盈亏件数"));
+        assertEquals(1, lines.length);
+    }
+
+    @Test
+    void diffExportForEmptyConfirmedCheckWritesHeaderOnly() throws Exception {
+        StockCheckDetailVO detail = new StockCheckDetailVO();
+        detail.setHeader(confirmedVO());
+        detail.setItems(Collections.emptyList());
+        detail.setRecordedCount(0);
+        detail.setDiffCount(0);
+        detail.setGainCount(0);
+        detail.setLossCount(0);
+        detail.setTotalDiffQuantity(0);
+        when(stockCheckService.getConfirmedDetailForExport(11L)).thenReturn(detail);
+
+        MvcResult result = mockMvc.perform(get("/stock-check/11/diff-export"))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        String csv = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+        String[] lines = csv.split("\r\n");
+        assertTrue(lines[0].endsWith("配件名称,账面数,实盘数,盈亏件数"));
+        assertEquals(1, lines.length);
+    }
+
+    @Test
+    void diffExportRejectsPendingCheckWithReason() throws Exception {
+        doThrow(new RuntimeException("待确认盘点单尚未回写库存，差异未定稿，请确认并回写后再导出差异明细"))
+                .when(stockCheckService).getConfirmedDetailForExport(10L);
+
+        mockMvc.perform(get("/stock-check/10/diff-export"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(500))
+                .andExpect(jsonPath("$.message").value(
+                        "待确认盘点单尚未回写库存，差异未定稿，请确认并回写后再导出差异明细"));
     }
 }

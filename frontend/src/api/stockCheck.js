@@ -51,3 +51,14 @@ export function deleteStockCheck(id) {
     method: 'delete'
   })
 }
+
+// 导出已确认盘点单的差异明细：返回完整 axios response（响应体为 Blob）；
+// 待确认单后端拒绝并返回原因
+export function exportStockCheckDiff(id) {
+  return request({
+    url: `/stock-check/${id}/diff-export`,
+    method: 'get',
+    responseType: 'blob',
+    timeout: 60000
+  })
+}

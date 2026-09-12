@@ -40,4 +40,12 @@ public interface StockCheckService extends IService<StockCheck> {
 
     /** 删除盘点单：仅待确认单可删除（已确认单是库存回写凭证需保留） */
     void delete(Long id);
+
+    /**
+     * 已确认盘点单的差异明细：仅含盘盈/盘亏（已登记且差异非 0）的正常配件，
+     * 已删除配件与账实一致配件不导出。与详情接口同一口径实时装配，
+     * 刷新后合计行的差异种数、盈亏件数与页面一致。
+     * 待确认单差异尚未定稿，拒绝导出
+     */
+    StockCheckDetailVO getConfirmedDetailForExport(Long id);
 }

@@ -9,7 +9,8 @@ import {
   createStockCheck,
   recordStockCheckItems,
   confirmStockCheck,
-  deleteStockCheck
+  deleteStockCheck,
+  exportStockCheckDiff
 } from '@/api/stockCheck'
 import { getZoneTagList } from '@/api/zoneTag'
 import { notifyStockChanged, __resetStockListenersForTests } from '@/utils/stockSync'
@@ -20,7 +21,8 @@ vi.mock('@/api/stockCheck', () => ({
   createStockCheck: vi.fn(),
   recordStockCheckItems: vi.fn(),
   confirmStockCheck: vi.fn(),
-  deleteStockCheck: vi.fn()
+  deleteStockCheck: vi.fn(),
+  exportStockCheckDiff: vi.fn()
 }))
 
 vi.mock('@/api/zoneTag', () => ({
@@ -482,6 +484,190 @@ describe('分区盘点 - 确认回写与锁定', () => {
     notifyStockChanged('accessory')
     await flushPromises()
     expect(getStockCheckPage).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+})
+
+describe('分区盘点 - 已确认单导出差异明细', () => {
+  let capturedDownload
+
+  // 已确认单：盘亏 +20/-20 两条差异、1 条一致、1 条已删除
+  const confirmedDetailWithDiff = () => ({
+    header: {
+      id: 11,
+      checkNo: 'PD20260912090000002',
+      zoneTagId: null,
+      zoneName: '未分配分区',
+      unassignedZone: true,
+      status: 1,
+      statusText: '已确认',
+      itemCount: 4,
+      createTime: '2026-09-12 09:00:00',
+      confirmTime: '2026-09-12 09:30:00'
+    },
+    items: [
+      {
+        id: 2001,
+        accessoryId: 3,
+        accessoryName: '超五类网线',
+        bookQuantity: 1000,
+        actualQuantity: 980,
+        recorded: true,
+        diffQuantity: -20,
+        diffType: 'loss',
+        accessoryDeleted: false,
+        specUnit: 'mm'
+      },
+      {
+        id: 2002,
+        accessoryId: 4,
+        accessoryName: '六类网线',
+        bookQuantity: 600,
+        actualQuantity: 620,
+        recorded: true,
+        diffQuantity: 20,
+        diffType: 'gain',
+        accessoryDeleted: false,
+        specUnit: 'mm'
+      },
+      {
+        id: 2003,
+        accessoryId: 5,
+        accessoryName: '水晶头',
+        bookQuantity: 100,
+        actualQuantity: 100,
+        recorded: true,
+        diffQuantity: 0,
+        diffType: 'even',
+        accessoryDeleted: false,
+        specUnit: '个'
+      },
+      {
+        id: 2004,
+        accessoryId: 99,
+        accessoryName: '旧型号',
+        bookQuantity: 10,
+        actualQuantity: null,
+        recorded: false,
+        diffQuantity: null,
+        diffType: 'deleted',
+        accessoryDeleted: true,
+        specUnit: null
+      }
+    ],
+    recordedCount: 3,
+    diffCount: 2,
+    gainCount: 1,
+    lossCount: 1,
+    totalDiffQuantity: 0
+  })
+
+  const openConfirmedDrawer = async (wrapper) => {
+    getStockCheckById.mockResolvedValue(confirmedDetailWithDiff())
+    // 已确认单在列表第二行，操作文案为“查看”
+    const viewButtons = Array.from(wrapper.element.querySelectorAll('button'))
+      .filter(b => b.textContent.replace(/\s/g, '').includes('查看'))
+    viewButtons[viewButtons.length - 1].click()
+    await waitTransition()
+    return document.body.querySelector('.el-drawer')
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    __resetStockListenersForTests()
+    document.body.innerHTML = ''
+    capturedDownload = null
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => 'blob:mock-url')
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      writable: true,
+      value: vi.fn()
+    })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () {
+      capturedDownload = this.download
+    })
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('已确认单抽屉显示导出按钮，待确认单不显示', async () => {
+    const pendingWrapper = await mountPage()
+    const pendingDrawer = await openPendingDrawer(pendingWrapper)
+    expect(pendingDrawer.textContent).not.toContain('导出差异明细')
+    pendingWrapper.unmount()
+    document.body.innerHTML = ''
+
+    const confirmedWrapper = await mountPage()
+    const confirmedDrawer = await openConfirmedDrawer(confirmedWrapper)
+    expect(confirmedDrawer.textContent).toContain('导出差异明细')
+    confirmedWrapper.unmount()
+  })
+
+  it('点击导出：调用导出接口、使用后端中文文件名下载并提示成功', async () => {
+    const wrapper = await mountPage()
+    const drawer = await openConfirmedDrawer(wrapper)
+    exportStockCheckDiff.mockResolvedValue({
+      headers: {
+        'content-disposition': `attachment; filename="fallback.csv"; filename*=UTF-8''${encodeURIComponent('盘点差异明细_PD20260912090000002.csv')}`
+      },
+      data: new Blob(['csv'], { type: 'text/csv' })
+    })
+
+    const exportBtn = Array.from(drawer.querySelectorAll('button'))
+      .find(b => b.textContent.includes('导出差异明细'))
+    await exportBtn.click()
+    await flushPromises()
+
+    expect(exportStockCheckDiff).toHaveBeenCalledWith(11)
+    expect(capturedDownload).toBe('盘点差异明细_PD20260912090000002.csv')
+    expect(ElMessage.success).toHaveBeenCalledWith('导出成功')
+    wrapper.unmount()
+  })
+
+  it('导出请求未完成时重复点击被忽略', async () => {
+    const wrapper = await mountPage()
+    const drawer = await openConfirmedDrawer(wrapper)
+    let resolveExport
+    exportStockCheckDiff.mockImplementation(
+      () => new Promise((resolve) => { resolveExport = resolve })
+    )
+
+    const exportBtn = Array.from(drawer.querySelectorAll('button'))
+      .find(b => b.textContent.includes('导出差异明细'))
+    await exportBtn.click()
+    await flushPromises()
+    await exportBtn.click()
+    await wrapper.vm.handleExportDiff()
+    expect(exportStockCheckDiff).toHaveBeenCalledTimes(1)
+
+    resolveExport({
+      headers: { 'content-disposition': '' },
+      data: new Blob(['csv'], { type: 'text/csv' })
+    })
+    await flushPromises()
+    expect(capturedDownload).toBe('盘点差异明细_PD20260912090000002.csv')
+    wrapper.unmount()
+  })
+
+  it('后端拒绝（待确认单）时不下载、提示后端原因', async () => {
+    const wrapper = await mountPage()
+    const drawer = await openConfirmedDrawer(wrapper)
+    // 极端并发：单据已退回待确认，后端在 HTTP 200 中返回 JSON 业务错误体
+    exportStockCheckDiff.mockRejectedValue(new Error('待确认盘点单尚未回写库存，差异未定稿，请确认并回写后再导出差异明细'))
+
+    const exportBtn = Array.from(drawer.querySelectorAll('button'))
+      .find(b => b.textContent.includes('导出差异明细'))
+    await exportBtn.click()
+    await flushPromises()
+
+    expect(capturedDownload).toBeNull()
+    expect(ElMessage.success).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })
