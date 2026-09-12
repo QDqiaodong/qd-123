@@ -83,10 +83,12 @@ export function exportStockGapZoneSummary() {
   })
 }
 
-// 按方案核销出库：扣减配件现存量，同一方案不可重复核销
-export function writeoffWiringPlan(id) {
+// 按方案核销出库：必须填写领料人与领料说明，扣减配件现存量；同一方案不可重复核销。
+// 仅在用户于核销对话框点击“确认出库”后调用；关闭/取消对话框不发请求、不产生核销记录
+export function writeoffWiringPlan(id, data) {
   return request({
     url: `/wiring-plan/${id}/writeoff`,
-    method: 'put'
+    method: 'put',
+    data
   })
 }

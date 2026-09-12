@@ -3,6 +3,7 @@ package com.factory.security.service;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.factory.security.dto.WiringPlanDTO;
+import com.factory.security.dto.WriteoffDTO;
 import com.factory.security.entity.WiringPlan;
 import com.factory.security.vo.StockGapVO;
 import com.factory.security.vo.StockGapZoneSummaryVO;
@@ -47,8 +48,8 @@ public interface WiringPlanService extends IService<WiringPlan> {
     List<StockGapZoneSummaryVO> listStockGapZoneSummary();
 
     /**
-     * 按方案核销出库：校验方案启用、未核销过、无已删除配件、现存量充足后，
-     * 在同一事务内逐条扣减配件现存量并写入核销记录。同一方案不可重复核销。
+     * 按方案核销出库：校验领料人与领料说明已填写、方案启用、未核销过、无已删除配件、现存量充足后，
+     * 在同一事务内逐条扣减配件现存量并写入核销记录（含领料人、领料说明快照）。同一方案不可重复核销。
      */
-    boolean writeoff(Long id);
+    boolean writeoff(Long id, WriteoffDTO dto);
 }

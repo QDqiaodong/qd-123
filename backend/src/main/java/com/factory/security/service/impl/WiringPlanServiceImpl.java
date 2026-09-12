@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.factory.security.dto.WiringPlanDTO;
 import com.factory.security.dto.WiringPlanDetailDTO;
+import com.factory.security.dto.WriteoffDTO;
 import com.factory.security.entity.Accessory;
 import com.factory.security.entity.StockWriteoff;
 import com.factory.security.entity.WiringPlan;
@@ -345,7 +346,17 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public boolean writeoff(Long id) {
+    public boolean writeoff(Long id, WriteoffDTO dto) {
+        // 核销即领料出库：领料人、领料说明是对账凭证，服务端强制非空，不依赖前端控制
+        String receiver = dto == null ? null : StringUtils.trimWhitespace(dto.getReceiver());
+        String remark = dto == null ? null : StringUtils.trimWhitespace(dto.getRemark());
+        if (!StringUtils.hasText(receiver)) {
+            throw new RuntimeException("请填写领料人后再核销出库");
+        }
+        if (!StringUtils.hasText(remark)) {
+            throw new RuntimeException("请填写领料说明后再核销出库");
+        }
+
         WiringPlan plan = getById(id);
         if (plan == null) {
             throw new RuntimeException("布线方案不存在或已被删除");
@@ -393,6 +404,9 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
         StockWriteoff writeoff = new StockWriteoff();
         writeoff.setPlanId(id);
         writeoff.setPlanName(plan.getPlanName());
+        // 领料信息随核销记录落库为快照：方案改名或删除都不影响对账
+        writeoff.setReceiver(receiver);
+        writeoff.setRemark(remark);
         try {
             stockWriteoffMapper.insert(writeoff);
         } catch (DuplicateKeyException e) {
@@ -656,6 +670,9 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
                                    StockWriteoff writeoff, Map<Long, Accessory> accessoryMap) {
         vo.setWriteoff(writeoff != null);
         vo.setWriteoffTime(writeoff != null ? writeoff.getCreateTime() : null);
+        // 领料信息与核销标记同源同生：核销记录在则随记录返回，刷新后标记、领料信息、已扣现存对得上
+        vo.setWriteoffReceiver(writeoff != null ? writeoff.getReceiver() : null);
+        vo.setWriteoffRemark(writeoff != null ? writeoff.getRemark() : null);
 
         boolean eligible = plan.getStatus() != null && plan.getStatus() == 1 && writeoff == null;
         if (!eligible) {

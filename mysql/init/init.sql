@@ -159,17 +159,47 @@ CREATE TABLE IF NOT EXISTS `wiring_plan_detail` (
 
 -- ----------------------------
 -- 方案出库核销记录表（幂等建表）
--- 每个方案至多一条核销记录（uk_plan_id），出库时一次性按明细扣减配件现存量
+-- 每个方案至多一条核销记录（uk_plan_id），出库时一次性按明细扣减配件现存量；
+-- 领料人、领料说明为对账必填项：核销出库即领料出库，缺领料人对账时无法对应是谁领的
 -- ----------------------------
 CREATE TABLE IF NOT EXISTS `stock_writeoff` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `plan_id` bigint NOT NULL COMMENT '布线方案ID',
   `plan_name` varchar(200) NOT NULL COMMENT '方案名称（出库时快照）',
-  `remark` varchar(500) DEFAULT NULL COMMENT '备注',
+  `receiver` varchar(100) NOT NULL DEFAULT '' COMMENT '领料人（核销出库时必填）',
+  `remark` varchar(500) NOT NULL DEFAULT '' COMMENT '领料说明（核销出库时必填，说明领用用途等）',
   `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '核销时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_plan_id` (`plan_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='方案出库核销记录表';
+
+-- ----------------------------
+-- 旧数据卷结构迁移：幂等补充领料人、领料说明列
+-- 全新数据卷建表时已包含这些列；旧卷通过存储过程判断 information_schema 后再 ADD COLUMN。
+-- 历史核销记录的领料信息无法追溯，以空串占位；服务层会对新核销强制非空校验
+-- ----------------------------
+DROP PROCEDURE IF EXISTS `add_stock_writeoff_columns`;
+DELIMITER //
+CREATE PROCEDURE `add_stock_writeoff_columns`()
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = 'stock_writeoff'
+                   AND COLUMN_NAME = 'receiver') THEN
+    ALTER TABLE `stock_writeoff`
+      ADD COLUMN `receiver` varchar(100) NOT NULL DEFAULT '' COMMENT '领料人（核销出库时必填）' AFTER `plan_name`;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = 'stock_writeoff'
+                   AND COLUMN_NAME = 'remark') THEN
+    ALTER TABLE `stock_writeoff`
+      ADD COLUMN `remark` varchar(500) NOT NULL DEFAULT '' COMMENT '领料说明（核销出库时必填）' AFTER `receiver`;
+  END IF;
+END //
+DELIMITER ;
+CALL `add_stock_writeoff_columns`();
+DROP PROCEDURE IF EXISTS `add_stock_writeoff_columns`;
 
 -- ----------------------------
 -- 配件分区调整流水表（幂等建表）

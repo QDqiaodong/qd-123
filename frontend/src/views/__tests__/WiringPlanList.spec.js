@@ -318,9 +318,45 @@ describe('布线方案 - 核销出库', () => {
     return row.findAll('button').find((b) => b.text().includes('核销出库'))
   }
 
-  it('库存充足：确认后调用核销接口、提示成功并刷新列表', async () => {
+  // 核销对话框与组件一同挂载（teleport 在测试环境落到组件根节点内）；
+  // el-dialog 关闭后 DOM 仍保留（仅隐藏），故需确认其 overlay 未被置为 display:none
+  const dialogVisible = (d) => {
+    const overlay = d.element.closest('.el-overlay')
+    return !overlay || overlay.style.display !== 'none'
+  }
+
+  const writeoffDialog = (wrapper) =>
+    wrapper
+      .findAll('.el-dialog')
+      .find((d) => d.find('.el-dialog__title')?.text().includes('核销出库') && dialogVisible(d))
+
+  const setDialogField = async (dialog, selector, value) => {
+    const input = dialog.element.querySelector(selector)
+    input.value = value
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+  }
+
+  const confirmWriteoffButton = (wrapper) =>
+    Array.from(writeoffDialog(wrapper).element.querySelectorAll('button'))
+      .find((b) => b.textContent.includes('确认出库'))
+
+  const clickNative = async (el) => {
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+  }
+
+  // el-form 错误文案经 validateState 防抖渲染（约 230ms），等待错误 DOM 出现
+  const waitForErrorText = async (dialog, text) => {
+    for (let i = 0; i < 30; i++) {
+      if (dialog.text().includes(text)) return
+      await new Promise((r) => setTimeout(r, 30))
+    }
+    expect(dialog.text()).toContain(text)
+  }
+
+  it('库存充足：点核销弹出领料对话框，填齐领料人/说明并确认后才调用接口、提示成功并刷新', async () => {
     const wrapper = await mountStockPage()
-    ElMessageBox.confirm.mockResolvedValue(undefined)
     writeoffWiringPlan.mockResolvedValue(undefined)
     getWiringPlanPage.mockResolvedValueOnce({ records: stockRows(), total: 3 })
 
@@ -329,11 +365,78 @@ describe('布线方案 - 核销出库', () => {
     await btn.trigger('click')
     await flushPromises()
 
+    // 仅打开对话框：不调用核销接口
+    const dialog = writeoffDialog(wrapper)
+    expect(dialog).toBeTruthy()
+    expect(writeoffWiringPlan).not.toHaveBeenCalled()
+
+    // 直接点确认：校验不通过，仍不调用接口
+    await clickNative(confirmWriteoffButton(wrapper))
+    await flushPromises()
+    expect(writeoffWiringPlan).not.toHaveBeenCalled()
+    await waitForErrorText(dialog, '请填写领料人')
+    await waitForErrorText(dialog, '请填写领料说明')
+
+    // 纯空格不算填写：与后端 trim 后必填校验一致
+    await setDialogField(dialog, 'input', '   ')
+    await setDialogField(dialog, 'textarea', '外围施工领料')
+    await clickNative(confirmWriteoffButton(wrapper))
+    await flushPromises()
+    expect(writeoffWiringPlan).not.toHaveBeenCalled()
+    await waitForErrorText(dialog, '请填写领料人')
+
+    // 填齐后确认：参数带领料人/说明（去除首尾空白）
+    await setDialogField(dialog, 'input', '  张三  ')
+    await setDialogField(dialog, 'textarea', '  外围监控施工领料  ')
+    await clickNative(confirmWriteoffButton(wrapper))
+    await flushPromises()
+
     expect(writeoffWiringPlan).toHaveBeenCalledTimes(1)
-    expect(writeoffWiringPlan).toHaveBeenCalledWith(1)
+    expect(writeoffWiringPlan).toHaveBeenCalledWith(1, {
+      receiver: '张三',
+      remark: '外围监控施工领料'
+    })
     expect(ElMessage.success).toHaveBeenCalledWith('核销出库成功，现存量已扣减')
     // 核销成功后重新拉取列表
     expect(getWiringPlanPage).toHaveBeenCalledTimes(2)
+    // 成功后对话框关闭
+    expect(writeoffDialog(wrapper)).toBeFalsy()
+
+    wrapper.unmount()
+  })
+
+  it('取消/关闭核销对话框：不调用接口、不产生核销记录', async () => {
+    const wrapper = await mountStockPage()
+
+    await writeoffButtonOf(wrapper, '库存充足方案').trigger('click')
+    await flushPromises()
+    const dialog = writeoffDialog(wrapper)
+    expect(dialog).toBeTruthy()
+
+    await setDialogField(dialog, 'input', '张三')
+    await setDialogField(dialog, 'textarea', '填了说明但不确认')
+
+    // 点击“取消”关闭对话框
+    const cancelBtn = Array.from(dialog.element.querySelectorAll('button'))
+      .find((b) => b.textContent.includes('取消'))
+    await clickNative(cancelBtn)
+    await flushPromises()
+
+    expect(writeoffWiringPlan).not.toHaveBeenCalled()
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    expect(getWiringPlanPage).toHaveBeenCalledTimes(1)
+    // 对话框已关闭
+    expect(writeoffDialog(wrapper)).toBeFalsy()
+
+    // 再次打开：上次未确认的填写内容已清空，必须重新填写
+    await writeoffButtonOf(wrapper, '库存充足方案').trigger('click')
+    await flushPromises()
+    const reopened = writeoffDialog(wrapper)
+    expect(reopened.element.querySelector('input').value).toBe('')
+    expect(reopened.element.querySelector('textarea').value).toBe('')
+    await clickNative(confirmWriteoffButton(wrapper))
+    await flushPromises()
+    expect(writeoffWiringPlan).not.toHaveBeenCalled()
 
     wrapper.unmount()
   })
@@ -361,6 +464,48 @@ describe('布线方案 - 核销出库', () => {
     const editBtn = row.findAll('button').find((b) => b.text().includes('编辑'))
     expect(editBtn.attributes('disabled')).toBeDefined()
     expect(row.text()).toContain('已核销')
+
+    wrapper.unmount()
+  })
+
+  it('已核销方案：详情展示领料人与领料说明，刷新后与核销标记同源可对账', async () => {
+    const wrapper = await mountStockPage()
+    const writtenOffPlan = {
+      id: 3,
+      planName: '已核销方案',
+      scene: '室内监控',
+      status: 1,
+      writeoff: true,
+      stockSufficient: true,
+      hasDeletedAccessory: false,
+      writeoffTime: '2026-09-10T12:00:00',
+      writeoffReceiver: '王五',
+      writeoffRemark: '3号厂房监控改造领料',
+      detailCount: 1,
+      description: null,
+      createTime: '2026-09-03 10:00:00',
+      details: [
+        { id: 30, accessoryId: 300, accessoryName: '防爆摄像头', model: 'FB-200', quantity: 2, stockQuantity: 10 }
+      ]
+    }
+    getWiringPlanById.mockResolvedValue(writtenOffPlan)
+    const row = wrapper
+      .findAll('.el-table__row')
+      .find((r) => r.text().includes('已核销方案'))
+    await row.findAll('button').find((b) => b.text().includes('详情')).trigger('click')
+    await flushPromises()
+
+    // 对话框在组件根节点下：核销状态、领料人、领料说明全部展示
+    const detailDialog = wrapper
+      .findAll('.el-dialog')
+      .find((d) => d.find('.el-dialog__title')?.text().includes('方案详情'))
+    expect(detailDialog.text()).toContain('已核销出库')
+    expect(detailDialog.text()).toContain('王五')
+    expect(detailDialog.text()).toContain('3号厂房监控改造领料')
+    // 已核销方案详情底部不再出现可点击的核销出库按钮
+    const footerWriteoffBtn = Array.from(detailDialog.element.querySelectorAll('button'))
+      .find((b) => b.textContent.includes('核销出库'))
+    expect(footerWriteoffBtn.attributes?.disabled).toBeDefined()
 
     wrapper.unmount()
   })

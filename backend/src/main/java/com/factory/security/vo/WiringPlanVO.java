@@ -21,6 +21,12 @@ public class WiringPlanVO extends WiringPlan {
     /** 核销时间（未核销为 null） */
     private LocalDateTime writeoffTime;
 
+    /** 领料人（核销出库时必填，未核销为 null），刷新后与核销记录同源 */
+    private String writeoffReceiver;
+
+    /** 领料说明（核销出库时必填，未核销为 null），刷新后与核销记录同源 */
+    private String writeoffRemark;
+
     /** 方案明细是否全部配件库存充足（已核销/停用/无明细时不作不足判断） */
     private Boolean stockSufficient;
 

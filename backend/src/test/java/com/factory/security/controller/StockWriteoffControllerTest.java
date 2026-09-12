@@ -1,16 +1,21 @@
 package com.factory.security.controller;
 
+import com.factory.security.dto.WriteoffDTO;
 import com.factory.security.service.WiringPlanService;
 import com.factory.security.vo.StockGapVO;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Collections;
 import java.util.List;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -21,6 +26,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(WiringPlanController.class)
 class StockWriteoffControllerTest {
+
+    private static final String WRITEOFF_BODY = "{\"receiver\":\"张三\",\"remark\":\"外围监控施工领料\"}";
 
     @Autowired
     private MockMvc mockMvc;
@@ -51,24 +58,54 @@ class StockWriteoffControllerTest {
 
     @Test
     void writeoffSuccessReturnsSuccess() throws Exception {
-        when(wiringPlanService.writeoff(1L)).thenReturn(true);
+        when(wiringPlanService.writeoff(eq(1L), any(WriteoffDTO.class))).thenReturn(true);
 
-        mockMvc.perform(put("/wiring-plan/1/writeoff"))
+        mockMvc.perform(put("/wiring-plan/1/writeoff")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(WRITEOFF_BODY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200));
 
-        verify(wiringPlanService).writeoff(1L);
+        verify(wiringPlanService).writeoff(eq(1L), any(WriteoffDTO.class));
     }
 
     @Test
     void writeoffRejectedForAlreadyWrittenOffPlan() throws Exception {
-        when(wiringPlanService.writeoff(1L))
+        when(wiringPlanService.writeoff(eq(1L), any(WriteoffDTO.class)))
                 .thenThrow(new RuntimeException("该方案已核销出库，同一方案不可重复核销"));
 
-        mockMvc.perform(put("/wiring-plan/1/writeoff"))
+        mockMvc.perform(put("/wiring-plan/1/writeoff")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(WRITEOFF_BODY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(500))
                 .andExpect(jsonPath("$.message").value("该方案已核销出库，同一方案不可重复核销"));
+    }
+
+    @Test
+    void writeoffRejectedWhenReceiverMissing() throws Exception {
+        // 领料人为必填：空领料人在控制器参数校验阶段即被拒绝，不进入核销逻辑、不扣库存
+        mockMvc.perform(put("/wiring-plan/1/writeoff")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"receiver\":\"\",\"remark\":\"外围监控施工领料\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("领料人不能为空"));
+
+        verify(wiringPlanService, never()).writeoff(anyLong(), any(WriteoffDTO.class));
+    }
+
+    @Test
+    void writeoffRejectedWhenRemarkMissing() throws Exception {
+        // 领料说明为必填：缺少说明同样拒绝，不产生核销记录
+        mockMvc.perform(put("/wiring-plan/1/writeoff")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"receiver\":\"张三\",\"remark\":\"   \"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("领料说明不能为空"));
+
+        verify(wiringPlanService, never()).writeoff(anyLong(), any(WriteoffDTO.class));
     }
 
     @Test
@@ -81,6 +118,6 @@ class StockWriteoffControllerTest {
                 .andExpect(jsonPath("$.data").isArray())
                 .andExpect(jsonPath("$.data.length()").value(0));
 
-        verify(wiringPlanService, never()).writeoff(org.mockito.ArgumentMatchers.anyLong());
+        verify(wiringPlanService, never()).writeoff(anyLong(), any(WriteoffDTO.class));
     }
 }

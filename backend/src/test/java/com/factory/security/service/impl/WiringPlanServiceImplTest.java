@@ -10,6 +10,7 @@ import com.factory.security.mapper.StockWriteoffMapper;
 import com.factory.security.mapper.WiringPlanDetailMapper;
 import com.factory.security.mapper.WiringPlanMapper;
 import com.factory.security.mapper.ZoneTagMapper;
+import com.factory.security.dto.WriteoffDTO;
 import com.factory.security.vo.StockGapVO;
 import com.factory.security.vo.StockGapZoneSummaryVO;
 import com.factory.security.vo.WiringPlanDetailVO;
@@ -514,6 +515,8 @@ class WiringPlanServiceImplTest {
         writeoff.setId(1L);
         writeoff.setPlanId(planId);
         writeoff.setPlanName("测试方案");
+        writeoff.setReceiver("王五");
+        writeoff.setRemark("测试领料说明");
         writeoff.setCreateTime(LocalDateTime.now());
         return writeoff;
     }
@@ -723,6 +726,13 @@ class WiringPlanServiceImplTest {
 
     // -------------------- 核销出库 --------------------
 
+    private WriteoffDTO writeoffDto() {
+        WriteoffDTO dto = new WriteoffDTO();
+        dto.setReceiver("张三");
+        dto.setRemark("外围监控施工领料");
+        return dto;
+    }
+
     @Test
     void writeoffDeductsStockAndRecordsOnce() {
         WiringPlan plan = buildPlan(1L, "厂区外围监控布线方案", "厂区外围监控", 1, "2026-09-02T10:00:00");
@@ -737,7 +747,7 @@ class WiringPlanServiceImplTest {
         when(accessoryMapper.deductStock(anyLong(), anyInt())).thenReturn(1);
         when(stockWriteoffMapper.insert(any(StockWriteoff.class))).thenReturn(1);
 
-        boolean result = wiringPlanService.writeoff(1L);
+        boolean result = wiringPlanService.writeoff(1L, writeoffDto());
 
         assertTrue(result);
         verify(accessoryMapper).deductStock(100L, 600);
@@ -746,6 +756,75 @@ class WiringPlanServiceImplTest {
         verify(stockWriteoffMapper).insert(captor.capture());
         assertEquals(1L, captor.getValue().getPlanId());
         assertEquals("厂区外围监控布线方案", captor.getValue().getPlanName());
+        // 领料人、领料说明随核销记录落库，刷新后与核销标记、已扣现存同源可对账
+        assertEquals("张三", captor.getValue().getReceiver());
+        assertEquals("外围监控施工领料", captor.getValue().getRemark());
+    }
+
+    @Test
+    void writeoffTrimsReceiverAndRemarkBeforePersisting() {
+        // 前后空白不应让必填校验失效，也不应把空白原样写进对账凭证
+        WiringPlan plan = buildPlan(1L, "启用方案", null, 1, "2026-09-02T10:00:00");
+        when(baseMapper.selectById(1L)).thenReturn(plan);
+        when(stockWriteoffMapper.selectOne(any())).thenReturn(null);
+        when(wiringPlanDetailMapper.selectList(any())).thenReturn(Collections.singletonList(
+                buildDetail(10L, 1L, 100L, 600)));
+        when(accessoryMapper.selectBatchIds(any())).thenReturn(Collections.singletonList(
+                buildStockAccessory(100L, "RVV电源线", 2L, 600, 0)));
+        when(accessoryMapper.deductStock(anyLong(), anyInt())).thenReturn(1);
+        when(stockWriteoffMapper.insert(any(StockWriteoff.class))).thenReturn(1);
+
+        WriteoffDTO dto = new WriteoffDTO();
+        dto.setReceiver("  李四  ");
+        dto.setRemark("  机房布线领料  ");
+        wiringPlanService.writeoff(1L, dto);
+
+        ArgumentCaptor<StockWriteoff> captor = ArgumentCaptor.forClass(StockWriteoff.class);
+        verify(stockWriteoffMapper).insert(captor.capture());
+        assertEquals("李四", captor.getValue().getReceiver());
+        assertEquals("机房布线领料", captor.getValue().getRemark());
+    }
+
+    @Test
+    void writeoffRejectsMissingReceiverWithoutAnyStockChange() {
+        // 核销即领料出库：未填领料人直接拒绝，不查方案/明细、不扣库存、不写核销记录
+        WriteoffDTO dto = new WriteoffDTO();
+        dto.setReceiver("   ");
+        dto.setRemark("外围监控施工领料");
+
+        RuntimeException e = assertThrows(RuntimeException.class,
+                () -> wiringPlanService.writeoff(1L, dto));
+
+        assertEquals("请填写领料人后再核销出库", e.getMessage());
+        verify(baseMapper, never()).selectById(anyLong());
+        verify(accessoryMapper, never()).deductStock(anyLong(), anyInt());
+        verify(stockWriteoffMapper, never()).insert(any(StockWriteoff.class));
+    }
+
+    @Test
+    void writeoffRejectsMissingRemarkWithoutAnyStockChange() {
+        // 未填领料说明同样拒绝，避免有出库扣减但对不上领用用途
+        WriteoffDTO dto = new WriteoffDTO();
+        dto.setReceiver("张三");
+        dto.setRemark("");
+
+        RuntimeException e = assertThrows(RuntimeException.class,
+                () -> wiringPlanService.writeoff(1L, dto));
+
+        assertEquals("请填写领料说明后再核销出库", e.getMessage());
+        verify(baseMapper, never()).selectById(anyLong());
+        verify(accessoryMapper, never()).deductStock(anyLong(), anyInt());
+        verify(stockWriteoffMapper, never()).insert(any(StockWriteoff.class));
+    }
+
+    @Test
+    void writeoffRejectsNullDtoWithoutAnyStockChange() {
+        RuntimeException e = assertThrows(RuntimeException.class,
+                () -> wiringPlanService.writeoff(1L, null));
+
+        assertEquals("请填写领料人后再核销出库", e.getMessage());
+        verify(accessoryMapper, never()).deductStock(anyLong(), anyInt());
+        verify(stockWriteoffMapper, never()).insert(any(StockWriteoff.class));
     }
 
     @Test
@@ -754,7 +833,8 @@ class WiringPlanServiceImplTest {
         when(baseMapper.selectById(1L)).thenReturn(plan);
         when(stockWriteoffMapper.selectOne(any())).thenReturn(buildWriteoff(1L));
 
-        RuntimeException e = assertThrows(RuntimeException.class, () -> wiringPlanService.writeoff(1L));
+        RuntimeException e = assertThrows(RuntimeException.class,
+                () -> wiringPlanService.writeoff(1L, writeoffDto()));
 
         assertEquals("该方案已核销出库，同一方案不可重复核销", e.getMessage());
         verify(accessoryMapper, never()).deductStock(anyLong(), anyInt());
@@ -766,7 +846,8 @@ class WiringPlanServiceImplTest {
         WiringPlan plan = buildPlan(2L, "停用方案", null, 0, "2026-09-01T10:00:00");
         when(baseMapper.selectById(2L)).thenReturn(plan);
 
-        RuntimeException e = assertThrows(RuntimeException.class, () -> wiringPlanService.writeoff(2L));
+        RuntimeException e = assertThrows(RuntimeException.class,
+                () -> wiringPlanService.writeoff(2L, writeoffDto()));
 
         assertEquals("停用状态的方案不可核销出库，请先启用方案", e.getMessage());
         verify(stockWriteoffMapper, never()).selectOne(any());
@@ -784,7 +865,8 @@ class WiringPlanServiceImplTest {
         when(accessoryMapper.selectBatchIds(any())).thenReturn(Collections.singletonList(
                 buildStockAccessory(100L, "RVV电源线", 2L, 1000, 0)));
 
-        RuntimeException e = assertThrows(RuntimeException.class, () -> wiringPlanService.writeoff(1L));
+        RuntimeException e = assertThrows(RuntimeException.class,
+                () -> wiringPlanService.writeoff(1L, writeoffDto()));
 
         assertEquals("方案包含已删除的配件，无法核销，请先调整方案明细", e.getMessage());
         verify(accessoryMapper, never()).deductStock(anyLong(), anyInt());
@@ -801,7 +883,8 @@ class WiringPlanServiceImplTest {
         when(accessoryMapper.selectBatchIds(any())).thenReturn(Collections.singletonList(
                 buildStockAccessory(100L, "RVV电源线", 2L, 500, 0)));
 
-        RuntimeException e = assertThrows(RuntimeException.class, () -> wiringPlanService.writeoff(1L));
+        RuntimeException e = assertThrows(RuntimeException.class,
+                () -> wiringPlanService.writeoff(1L, writeoffDto()));
 
         assertTrue(e.getMessage().contains("现存量不足"));
         verify(accessoryMapper, never()).deductStock(anyLong(), anyInt());

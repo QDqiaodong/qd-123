@@ -195,7 +195,13 @@
             </el-tag>
             <span v-else>未核销</span>
           </el-descriptions-item>
+          <el-descriptions-item label="领料人">
+            {{ currentPlan.writeoff ? (currentPlan.writeoffReceiver || '-') : '-' }}
+          </el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ currentPlan.createTime }}</el-descriptions-item>
+          <el-descriptions-item label="领料说明" :span="2">
+            {{ currentPlan.writeoff ? (currentPlan.writeoffRemark || '-') : '-' }}
+          </el-descriptions-item>
           <el-descriptions-item label="方案说明" :span="2">
             {{ currentPlan.description || '-' }}
           </el-descriptions-item>
@@ -203,7 +209,7 @@
 
         <el-alert
           v-if="currentPlan.writeoff"
-          title="该方案已核销出库，现存量已按下列需求数量扣减；同一方案不可重复核销。"
+          title="该方案已核销出库，现存量已按下列需求数量扣减；同一方案不可重复核销，领料信息见上方登记。"
           type="success"
           :closable="false"
           show-icon
@@ -227,7 +233,7 @@
         />
         <el-alert
           v-else-if="currentPlan.status === 1"
-          title="配件现存量充足，可核销出库；核销后将按需求数量扣减现存量且不可重复核销。"
+          title="配件现存量充足，可核销出库；核销时需登记领料人与领料说明，核销后将按需求数量扣减现存量且不可重复核销。"
           type="success"
           :closable="false"
           show-icon
@@ -286,11 +292,64 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 核销出库即领料出库：必须填写领料人与领料说明，只有点“确认出库”才会真正扣减现存、写核销记录；
+         关闭/取消对话框不发起任何请求 -->
+    <el-dialog
+      v-model="writeoffDialogVisible"
+      title="核销出库"
+      width="520px"
+      :close-on-click-modal="false"
+      @closed="handleWriteoffDialogClosed"
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        class="writeoff-alert"
+        title="确认后将按明细需求数量一次性扣减配件现存量，该方案不可重复核销、不可编辑。"
+      />
+      <el-form
+        ref="writeoffFormRef"
+        :model="writeoffForm"
+        :rules="writeoffRules"
+        label-width="92px"
+        @keyup.enter="handleWriteoffSubmit"
+      >
+        <el-form-item label="方案名称">
+          <span class="writeoff-plan-name">{{ writeoffForm.planName }}</span>
+        </el-form-item>
+        <el-form-item label="领料人" prop="receiver" required>
+          <el-input
+            v-model="writeoffForm.receiver"
+            placeholder="请填写实际领料人"
+            maxlength="100"
+            clearable
+          />
+        </el-form-item>
+        <el-form-item label="领料说明" prop="remark" required>
+          <el-input
+            v-model="writeoffForm.remark"
+            type="textarea"
+            :rows="3"
+            placeholder="请填写领料用途等说明，便于对账追溯"
+            maxlength="500"
+            show-word-limit
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="writeoffLoading" @click="writeoffDialogVisible = false">取消</el-button>
+        <el-button type="warning" :loading="writeoffLoading" @click="handleWriteoffSubmit">
+          确认出库
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Plus, Connection, Download } from '@element-plus/icons-vue'
 import {
@@ -345,6 +404,22 @@ const currentPlan = ref(null)
 // 核销请求进行中标记：请求未返回前重复点击直接忽略，避免重复核销
 const writeoffLoading = ref(false)
 
+// 核销出库对话框：核销即领料出库，领料人、领料说明在确认前必须填写；
+// 仅点击“确认出库”并通过校验才发请求，关闭/取消对话框不产生任何核销记录
+const writeoffDialogVisible = ref(false)
+const writeoffFormRef = ref()
+const writeoffForm = reactive({
+  planId: null,
+  planName: '',
+  receiver: '',
+  remark: ''
+})
+const writeoffRules = {
+  // whitespace: true 使纯空格也判定为空，与后端 trim 后的必填校验一致
+  receiver: [{ required: true, whitespace: true, message: '请填写领料人', trigger: 'blur' }],
+  remark: [{ required: true, whitespace: true, message: '请填写领料说明', trigger: 'blur' }]
+}
+
 // 仅“启用、未核销、库存充足且不含已删除配件”的方案可核销出库
 const canWriteoff = (plan) => !!plan
   && plan.status === 1
@@ -370,34 +445,55 @@ const formatTime = (time) => {
   return String(time).replace('T', ' ').slice(0, 19)
 }
 
+// 打开核销出库对话框：只登记待核销方案与领料表单，不扣库存、不写核销记录；
+// 用户必须填写领料人与领料说明并点击“确认出库”才真正发起核销
 const handleWriteoff = (row) => {
   if (!canWriteoff(row)) {
     return
   }
-  ElMessageBox.confirm(
-    `确认按方案「${row.planName}」核销出库吗？将按明细需求数量一次性扣减配件现存量，核销后该方案不可重复核销、不可编辑。`,
-    '核销出库确认',
-    {
-      confirmButtonText: '确认核销',
-      cancelButtonText: '取消',
-      type: 'warning'
-    }
-  )
-    .then(async () => {
-      if (writeoffLoading.value) return
-      writeoffLoading.value = true
-      try {
-        await writeoffWiringPlan(row.id)
-        ElMessage.success('核销出库成功，现存量已扣减')
-        detailDialogVisible.value = false
-        await loadData()
-        // 核销已实际扣减现存量：通知缺口页按新现存量重算需求合计与缺口数字
-        notifyStockChanged('wiring-plan')
-      } finally {
-        writeoffLoading.value = false
-      }
+  writeoffForm.planId = row.id
+  writeoffForm.planName = row.planName
+  writeoffForm.receiver = ''
+  writeoffForm.remark = ''
+  writeoffDialogVisible.value = true
+  // 对话框内容首次打开才渲染，ref 在下一 tick 就绪；清掉上一次遗留的错误态
+  nextTick(() => writeoffFormRef.value?.clearValidate())
+}
+
+const handleWriteoffSubmit = async () => {
+  // 请求未返回前忽略重复提交；校验未通过时停留在对话框，不发起请求
+  if (writeoffLoading.value) return
+  try {
+    await writeoffFormRef.value.validate()
+  } catch {
+    return
+  }
+  writeoffLoading.value = true
+  try {
+    await writeoffWiringPlan(writeoffForm.planId, {
+      receiver: writeoffForm.receiver.trim(),
+      remark: writeoffForm.remark.trim()
     })
-    .catch(() => {})
+    ElMessage.success('核销出库成功，现存量已扣减')
+    writeoffDialogVisible.value = false
+    // 从详情弹窗发起核销时同步关闭详情，避免停留在“可核销”的旧详情上
+    detailDialogVisible.value = false
+    await loadData()
+    // 核销已实际扣减现存量：通知缺口页按新现存量重算需求合计与缺口数字
+    notifyStockChanged('wiring-plan')
+  } finally {
+    writeoffLoading.value = false
+  }
+}
+
+// 对话框关闭后（取消、点 X、确认成功均会触发）清空表单与校验状态：
+// 未确认的填写内容绝不落库，下次打开是干净表单
+const handleWriteoffDialogClosed = () => {
+  writeoffForm.planId = null
+  writeoffForm.planName = ''
+  writeoffForm.receiver = ''
+  writeoffForm.remark = ''
+  writeoffFormRef.value?.clearValidate()
 }
 
 const zoneGroups = computed(() => {
@@ -751,6 +847,15 @@ onBeforeUnmount(() => {
 
 .detail-alert {
   margin-bottom: 16px;
+}
+
+.writeoff-alert {
+  margin-bottom: 18px;
+}
+
+.writeoff-plan-name {
+  font-weight: 600;
+  color: #303133;
 }
 
 .shortage-text {

@@ -3,6 +3,7 @@ package com.factory.security.controller;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.factory.security.dto.Result;
 import com.factory.security.dto.WiringPlanDTO;
+import com.factory.security.dto.WriteoffDTO;
 import com.factory.security.service.WiringPlanService;
 import com.factory.security.util.CsvExporter;
 import com.factory.security.vo.StockGapVO;
@@ -146,12 +147,12 @@ public class WiringPlanController {
     }
 
     /**
-     * 按方案核销出库：扣减配件现存量并登记核销记录；
+     * 按方案核销出库：必须填写领料人与领料说明，校验通过后扣减配件现存量并登记核销记录；
      * 停用方案、已核销方案、含已删除配件或现存量不足时返回明确错误
      */
     @PutMapping("/{id}/writeoff")
-    public Result<Void> writeoff(@PathVariable Long id) {
-        wiringPlanService.writeoff(id);
+    public Result<Void> writeoff(@PathVariable Long id, @Valid @RequestBody WriteoffDTO dto) {
+        wiringPlanService.writeoff(id, dto);
         return Result.success();
     }
 
