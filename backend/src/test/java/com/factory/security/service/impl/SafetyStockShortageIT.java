@@ -85,7 +85,7 @@ class SafetyStockShortageIT {
 
     @Test
     void ledgerMatchesArchiveFilterAndGap() {
-        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages();
+        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages(null, false);
 
         // 仅 2 条：分区内六类网线 + 未分配低位件
         assertEquals(2, rows.size());
@@ -113,8 +113,41 @@ class SafetyStockShortageIT {
     }
 
     @Test
+    void ledgerFilteredByZoneReturnsOnlyThatZone() {
+        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages(cableZoneId, false);
+
+        // 线缆布线区只有六类网线一个低位件；未分配低位件不混入
+        assertEquals(1, rows.size());
+        assertEquals("六类网线", rows.get(0).getAccessoryName());
+        assertEquals(cableZoneId, rows.get(0).getZoneTagId());
+        assertFalse(rows.get(0).getUnassignedZone());
+    }
+
+    @Test
+    void ledgerFilteredUnassignedOnlyReturnsUnassignedRows() {
+        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages(null, true);
+
+        // 未分配分区可单独筛出，分区内的六类网线不混入
+        assertEquals(1, rows.size());
+        assertEquals("未分配低位件", rows.get(0).getAccessoryName());
+        assertTrue(rows.get(0).getUnassignedZone());
+    }
+
+    @Test
+    void ledgerZoneFilterWithNoLowItemsReturnsEmpty() {
+        ZoneTag emptyZone = new ZoneTag();
+        emptyZone.setTagName("监控设备区");
+        emptyZone.setTagCode("ZONE-MONITOR-SS");
+        emptyZone.setSortOrder(3);
+        zoneTagMapper.insert(emptyZone);
+
+        // 该分区内没有任何低位配件
+        assertTrue(accessoryService.listSafetyStockShortages(emptyZone.getId(), false).isEmpty());
+    }
+
+    @Test
     void refreshAfterStockOrLimitChangeRecomputes() {
-        assertEquals(2, accessoryService.listSafetyStockShortages().size());
+        assertEquals(2, accessoryService.listSafetyStockShortages(null, false).size());
 
         // 把六类网线补到下限：不再进台账
         Accessory cat6 = accessoryMapper.selectOne(new com.baomidou.mybatisplus.core.conditions
@@ -122,7 +155,7 @@ class SafetyStockShortageIT {
         cat6.setStockQuantity(800);
         accessoryMapper.updateById(cat6);
 
-        List<SafetyStockVO> afterRestock = accessoryService.listSafetyStockShortages();
+        List<SafetyStockVO> afterRestock = accessoryService.listSafetyStockShortages(null, false);
         assertEquals(1, afterRestock.size());
         assertEquals("未分配低位件", afterRestock.get(0).getAccessoryName());
 
@@ -132,14 +165,14 @@ class SafetyStockShortageIT {
         unassigned.setSafetyStock(null);
         accessoryMapper.updateById(unassigned);
 
-        assertTrue(accessoryService.listSafetyStockShortages().isEmpty());
+        assertTrue(accessoryService.listSafetyStockShortages(null, false).isEmpty());
     }
 
     @Test
     void clearingLimitThroughServiceUpdatePersistsNullAndRemovesFromLedger() {
         // 走与前端“编辑-清空（不设下限）-保存”一致的 service.update 路径，
         // 验证 null 下限确实落库（updateById 默认会忽略 null，需要显式同步）
-        assertEquals(2, accessoryService.listSafetyStockShortages().size());
+        assertEquals(2, accessoryService.listSafetyStockShortages(null, false).size());
 
         Accessory cat6 = accessoryMapper.selectOne(new com.baomidou.mybatisplus.core.conditions
                 .query.LambdaQueryWrapper<Accessory>().eq(Accessory::getModel, "CAT6-SS"));
@@ -154,7 +187,7 @@ class SafetyStockShortageIT {
         accessoryService.update(dto);
 
         assertNull(accessoryMapper.selectById(cat6.getId()).getSafetyStock());
-        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages();
+        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages(null, false);
         assertEquals(1, rows.size());
         assertEquals("未分配低位件", rows.get(0).getAccessoryName());
     }

@@ -88,7 +88,7 @@ class AccessoryServiceImplTest {
                 zone(1L, "弱电桥架区", 1),
                 zone(2L, "线缆布线区", 2)));
 
-        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages();
+        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages(null, false);
 
         // 排序：分区排序号升序（弱电桥架区在前），未分配分区最后
         assertEquals(3, rows.size());
@@ -114,9 +114,42 @@ class AccessoryServiceImplTest {
     void emptyShortageListReturnsEmptyAndSkipsZoneQuery() {
         when(baseMapper.selectList(any())).thenReturn(Collections.emptyList());
 
-        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages();
+        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages(null, false);
 
         assertTrue(rows.isEmpty());
+    }
+
+    @Test
+    void shortagesByZoneTagIdAssembleZoneRows() {
+        // 指定分区筛选在 SQL 层 zone_tag_id=? 下推，mapper 只返回该分区的低位件
+        Accessory cat6 = accessory(4L, "六类网线", 2L, 600, 800);
+        when(baseMapper.selectList(any())).thenReturn(Collections.singletonList(cat6));
+        when(zoneTagMapper.selectBatchIds(any())).thenReturn(
+                Collections.singletonList(zone(2L, "线缆布线区", 2)));
+
+        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages(2L, false);
+
+        assertEquals(1, rows.size());
+        assertEquals("六类网线", rows.get(0).getAccessoryName());
+        assertEquals("线缆布线区", rows.get(0).getZoneTagName());
+        assertFalse(rows.get(0).getUnassignedZone());
+    }
+
+    @Test
+    void shortagesFilteredUnassignedOnlyDropsDanglingZoneTag() {
+        // 悬挂分区：zone_tag_id 非空但分区标签已删除。真实 SQL 的 IS NULL 粗筛会排除它，
+        // 这里直接模拟装配后 unassignedZone=true 的结果，验证二次过滤与标识装配
+        Accessory dangling = accessory(31L, "悬挂分区低位件", 99L, 5, 10);
+        when(baseMapper.selectList(any())).thenReturn(Collections.singletonList(dangling));
+        when(zoneTagMapper.selectBatchIds(any())).thenReturn(Collections.emptyList());
+
+        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages(null, true);
+
+        // 分区标签缺失被识别为未分配，筛选保留（IS NULL 与标识过滤双保险均能兜住）
+        assertEquals(1, rows.size());
+        assertEquals("悬挂分区低位件", rows.get(0).getAccessoryName());
+        assertTrue(rows.get(0).getUnassignedZone());
+        assertNull(rows.get(0).getZoneTagName());
     }
 
     @Test
@@ -127,7 +160,7 @@ class AccessoryServiceImplTest {
         when(zoneTagMapper.selectBatchIds(any())).thenReturn(
                 Collections.singletonList(zone(2L, "线缆布线区", 2)));
 
-        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages();
+        List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages(null, false);
 
         assertEquals(1, rows.size());
         assertEquals(0, rows.get(0).getStockQuantity());

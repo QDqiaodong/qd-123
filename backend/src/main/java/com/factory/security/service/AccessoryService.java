@@ -24,6 +24,9 @@ public interface AccessoryService extends IService<Accessory> {
      * 安全库存台账：仅返回未删除、已设安全库存下限且现存量低于下限的配件。
      * 未设下限（null）、现存量不低于下限、已删除的配件不进台账；
      * 未分配分区的低位配件同样列出。改下限或现存量后实时重算。
+     *
+     * @param zoneTagId     按库房分区筛选；null 且 unassignedOnly=false 时返回全集
+     * @param unassignedOnly true 时只返回未分配分区（无分区或分区标签已缺失）的低位配件
      */
-    List<SafetyStockVO> listSafetyStockShortages();
+    List<SafetyStockVO> listSafetyStockShortages(Long zoneTagId, boolean unassignedOnly);
 }

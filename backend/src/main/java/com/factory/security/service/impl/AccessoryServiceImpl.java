@@ -89,12 +89,19 @@ public class AccessoryServiceImpl extends ServiceImpl<AccessoryMapper, Accessory
     }
 
     @Override
-    public List<SafetyStockVO> listSafetyStockShortages() {
+    public List<SafetyStockVO> listSafetyStockShortages(Long zoneTagId, boolean unassignedOnly) {
         // 台账口径：正常配件（@TableLogic 自动过滤已删除）、已设下限（非 null）、现存量低于下限。
         // 用列与列比较直接在 SQL 过滤，未设下限的不查、现存量不低于下限的不查。
         LambdaQueryWrapper<Accessory> wrapper = new LambdaQueryWrapper<>();
         wrapper.isNotNull(Accessory::getSafetyStock)
                 .apply("stock_quantity < safety_stock");
+        // 分区筛选优先下推到 SQL：指定分区按 zone_tag_id 等值；未分配分区先按 IS NULL 粗筛，
+        // 分区标签已缺失的悬挂分区在装配 VO 后用 unassignedZone 二次过滤兜住
+        if (unassignedOnly) {
+            wrapper.isNull(Accessory::getZoneTagId);
+        } else if (zoneTagId != null) {
+            wrapper.eq(Accessory::getZoneTagId, zoneTagId);
+        }
 
         List<Accessory> accessories = list(wrapper);
         if (accessories.isEmpty()) {
@@ -113,6 +120,9 @@ public class AccessoryServiceImpl extends ServiceImpl<AccessoryMapper, Accessory
 
         return accessories.stream()
                 .map(accessory -> buildSafetyStockVO(accessory, zoneTagMap))
+                // 未分配分区筛选与页面/导出同源：悬挂分区（zone_tag_id 非空但分区标签已删除）
+                // 在 SQL 粗筛后仍可能漏入，这里按装配出的 unassignedZone 标识二次过滤
+                .filter(row -> !unassignedOnly || Boolean.TRUE.equals(row.getUnassignedZone()))
                 // 排序与缺口列表/方案明细一致：分区排序号升序、同分区按配件名称、未分配分区最后
                 .sorted(Comparator
                         .comparingLong((SafetyStockVO row) -> {
