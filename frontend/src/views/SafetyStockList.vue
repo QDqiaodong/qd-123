@@ -16,7 +16,9 @@
         <el-tag v-if="!isUnassignedFilter" type="warning" effect="plain">
           其中未分配分区 {{ unassignedCount }} 种
         </el-tag>
+        <el-tag type="danger" effect="dark">紧急 {{ urgentCount }} 种（缺口≥下限一半）</el-tag>
         <el-tag type="info" effect="plain">缺口合计 {{ totalGap }} 件</el-tag>
+        <el-tag type="info" effect="plain">组内按缺口从大到小排</el-tag>
         <el-tag type="info" effect="plain">未设下限的配件不进台账</el-tag>
       </div>
     </el-card>
@@ -56,7 +58,7 @@
         border
         stripe
         class="assigned-table"
-        row-class-name="shortage-row"
+        :row-class-name="assignedRowClassName"
         style="width: 100%"
       >
         <el-table-column prop="accessoryName" label="名称" min-width="160" />
@@ -72,9 +74,12 @@
           </template>
         </el-table-column>
         <el-table-column prop="safetyStock" label="下限" min-width="100" align="center" />
-        <el-table-column label="缺口" min-width="110" align="center">
+        <el-table-column label="缺口" min-width="130" align="center">
           <template #default="{ row }">
-            <span class="shortage-text">{{ row.gapQuantity }}</span>
+            <span class="gap-cell">
+              <span class="shortage-text">{{ row.gapQuantity }}</span>
+              <el-tag v-if="row.urgent" type="danger" size="small" effect="dark">紧急</el-tag>
+            </span>
           </template>
         </el-table-column>
         <el-table-column label="规格单位" min-width="90" align="center">
@@ -93,7 +98,7 @@
           description="未分配分区暂无低于下限的配件"
           :image-size="60"
         />
-        <el-table v-else v-loading="loading" :data="unassignedShortages" border size="small" row-class-name="unassigned-row" style="width: 100%">
+        <el-table v-else v-loading="loading" :data="unassignedShortages" border size="small" :row-class-name="unassignedRowClassName" style="width: 100%">
           <el-table-column prop="accessoryName" label="名称" min-width="160" />
           <el-table-column prop="model" label="型号" min-width="140" />
           <el-table-column label="分区" width="120" align="center">
@@ -107,9 +112,12 @@
             </template>
           </el-table-column>
           <el-table-column prop="safetyStock" label="下限" width="100" align="center" />
-          <el-table-column label="缺口" width="100" align="center">
+          <el-table-column label="缺口" width="130" align="center">
             <template #default="{ row }">
-              <span class="shortage-text">{{ row.gapQuantity }}</span>
+              <span class="gap-cell">
+                <span class="shortage-text">{{ row.gapQuantity }}</span>
+                <el-tag v-if="row.urgent" type="danger" size="small" effect="dark">紧急</el-tag>
+              </span>
             </template>
           </el-table-column>
         </el-table>
@@ -151,6 +159,16 @@ const unassignedShortages = computed(() =>
   shortages.value.filter(item => item.unassignedZone)
 )
 const unassignedCount = computed(() => unassignedShortages.value.length)
+
+// 紧急件数直接对当前筛选台账行计数：换分区或改下限刷新后，urgent 由后端随新缺口实时给出，
+// 统计与每行“紧急”标记、排序同源，不会出现标签与顺序不一致
+const urgentCount = computed(() =>
+  shortages.value.filter(item => item.urgent).length
+)
+
+// 紧急行加深红底纹（缺口达到下限一半及以上），普通低位行保持浅红；未分配紧急行加深橙底
+const assignedRowClassName = ({ row }) => (row.urgent ? 'urgent-row' : 'shortage-row')
+const unassignedRowClassName = ({ row }) => (row.urgent ? 'urgent-row' : 'unassigned-row')
 
 // 分区下拉的已分配选项由“全集台账见过的分区 + 当前台账行的分区”合并去重，
 // 后端按分区排序、未分配殿后，合并时保留该顺序；未分配分区作为固定选项始终可选
@@ -342,8 +360,20 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
+/* 缺口数字与“紧急”标签同一行展示 */
+.gap-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 :deep(.shortage-row) {
   background-color: #fef0f0;
+}
+
+/* 紧急（缺口达下限一半及以上）：更深的红底，避免急件混在普通低位行里被漏看 */
+:deep(.urgent-row) {
+  background-color: #fde2e2;
 }
 
 :deep(.unassigned-row) {

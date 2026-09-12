@@ -123,7 +123,9 @@ public class AccessoryServiceImpl extends ServiceImpl<AccessoryMapper, Accessory
                 // 未分配分区筛选与页面/导出同源：悬挂分区（zone_tag_id 非空但分区标签已删除）
                 // 在 SQL 粗筛后仍可能漏入，这里按装配出的 unassignedZone 标识二次过滤
                 .filter(row -> !unassignedOnly || Boolean.TRUE.equals(row.getUnassignedZone()))
-                // 排序与缺口列表/方案明细一致：分区排序号升序、同分区按配件名称、未分配分区最后
+                // 采购按分区领料：仍保持分区顺序（分区排序号升序、未分配分区殿后），
+                // 但同一分区内缺口从大到小，缺口大的急件不混在普通行里；
+                // 缺口相同再按名称、ID 稳定排序。换分区或改下限刷新后，顺序随新缺口重排
                 .sorted(Comparator
                         .comparingLong((SafetyStockVO row) -> {
                             if (Boolean.TRUE.equals(row.getUnassignedZone())) {
@@ -140,6 +142,8 @@ public class AccessoryServiceImpl extends ServiceImpl<AccessoryMapper, Accessory
                             return zoneTag != null && zoneTag.getTagName() != null
                                     ? zoneTag.getTagName() : "";
                         })
+                        .thenComparing(SafetyStockVO::getGapQuantity,
+                                Comparator.nullsLast(Comparator.reverseOrder()))
                         .thenComparing(row -> row.getAccessoryName() != null ? row.getAccessoryName() : "")
                         .thenComparing(SafetyStockVO::getAccessoryId,
                                 Comparator.nullsLast(Comparator.naturalOrder())))
@@ -167,7 +171,11 @@ public class AccessoryServiceImpl extends ServiceImpl<AccessoryMapper, Accessory
         vo.setStockQuantity(stock);
         vo.setSafetyStock(safetyStock);
         // 进入台账即现存量 < 下限，缺口恒大于 0
-        vo.setGapQuantity(safetyStock - stock);
+        int gap = safetyStock - stock;
+        vo.setGapQuantity(gap);
+        // 紧急口径：缺口达到下限一半及以上（2*缺口 >= 下限，含恰好一半的边界）；
+        // 每次实时计算，改下限或换分区刷新后紧急标记与新缺口一致
+        vo.setUrgent(2 * gap >= safetyStock);
         vo.setCreateTime(accessory.getCreateTime());
         return vo;
     }

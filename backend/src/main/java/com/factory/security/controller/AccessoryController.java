@@ -25,9 +25,9 @@ import java.util.List;
 @CrossOrigin(exposedHeaders = "Content-Disposition")
 public class AccessoryController {
 
-    /** 安全库存台账导出列：名称、分区、现存量、下限、缺口，与页面台账列一一对应 */
+    /** 安全库存台账导出列：名称、分区、现存量、下限、缺口、紧急，与页面台账列一一对应 */
     private static final String[] SAFETY_STOCK_EXPORT_HEADERS = {
-            "名称", "分区", "现存量", "下限", "缺口"
+            "名称", "分区", "现存量", "下限", "缺口", "紧急"
     };
 
     @Autowired
@@ -56,9 +56,10 @@ public class AccessoryController {
     }
 
     /**
-     * 导出当前分区筛选下的台账 CSV：列仅含名称、分区、现存、下限、缺口。
-     * 与页面台账共用同一 service 口径（同一套筛选参数），换分区或改下限后重新导出，
-     * 导出行数与缺口逐行与页面一致；未分配分区在文件中写作“未分配分区”。
+     * 导出当前分区筛选下的台账 CSV：列为名称、分区、现存、下限、缺口、紧急。
+     * 与页面台账共用同一 service 口径（同一套筛选参数、同一套排序与紧急标记），
+     * 换分区或改下限后重新导出，导出行数、顺序与缺口逐行与页面一致；
+     * 未分配分区在文件中写作“未分配分区”。
      * 空结果也返回仅含表头的 CSV（含 UTF-8 BOM，Excel 打开中文不乱码），
      * 文件名含中文使用 RFC 5987 filename* 编码并提供 ASCII 兜底名。
      */
@@ -78,7 +79,8 @@ public class AccessoryController {
                     zoneName,
                     String.valueOf(row.getStockQuantity()),
                     String.valueOf(row.getSafetyStock()),
-                    String.valueOf(row.getGapQuantity())
+                    String.valueOf(row.getGapQuantity()),
+                    Boolean.TRUE.equals(row.getUrgent()) ? "紧急" : ""
             });
         }
 

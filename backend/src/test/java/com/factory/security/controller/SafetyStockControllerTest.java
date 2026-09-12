@@ -37,7 +37,8 @@ class SafetyStockControllerTest {
     private AccessoryService accessoryService;
 
     private SafetyStockVO row(Long id, String name, Long zoneTagId, String zoneName,
-                              boolean unassigned, int stock, int safetyStock, int gap) {
+                              boolean unassigned, int stock, int safetyStock, int gap,
+                              boolean urgent) {
         SafetyStockVO vo = new SafetyStockVO();
         vo.setAccessoryId(id);
         vo.setAccessoryName(name);
@@ -47,14 +48,15 @@ class SafetyStockControllerTest {
         vo.setStockQuantity(stock);
         vo.setSafetyStock(safetyStock);
         vo.setGapQuantity(gap);
+        vo.setUrgent(urgent);
         return vo;
     }
 
     @Test
     void safetyStockReturnsLowItemsIncludingUnassigned() throws Exception {
         when(accessoryService.listSafetyStockShortages(null, false)).thenReturn(Arrays.asList(
-                row(4L, "六类网线", 2L, "线缆布线区", false, 600, 800, 200),
-                row(30L, "未分配低位件", null, null, true, 5, 10, 5)));
+                row(4L, "六类网线", 2L, "线缆布线区", false, 600, 800, 200, false),
+                row(30L, "未分配急件", null, null, true, 1, 10, 9, true)));
 
         mockMvc.perform(get("/accessory/safety-stock"))
                 .andExpect(status().isOk())
@@ -65,10 +67,14 @@ class SafetyStockControllerTest {
                 .andExpect(jsonPath("$.data[0].stockQuantity").value(600))
                 .andExpect(jsonPath("$.data[0].safetyStock").value(800))
                 .andExpect(jsonPath("$.data[0].gapQuantity").value(200))
+                // 缺口 200 不足下限 800 的一半：非紧急
+                .andExpect(jsonPath("$.data[0].urgent").value(false))
                 // 未分配分区的低位配件不能漏，分区名为空但有未分配标识
-                .andExpect(jsonPath("$.data[1].accessoryName").value("未分配低位件"))
+                .andExpect(jsonPath("$.data[1].accessoryName").value("未分配急件"))
                 .andExpect(jsonPath("$.data[1].unassignedZone").value(true))
-                .andExpect(jsonPath("$.data[1].gapQuantity").value(5));
+                .andExpect(jsonPath("$.data[1].gapQuantity").value(9))
+                // 未分配分区的急件同样带紧急标记
+                .andExpect(jsonPath("$.data[1].urgent").value(true));
 
         verify(accessoryService).listSafetyStockShortages(null, false);
     }
@@ -76,7 +82,7 @@ class SafetyStockControllerTest {
     @Test
     void safetyStockFiltersByZoneTagId() throws Exception {
         when(accessoryService.listSafetyStockShortages(2L, false)).thenReturn(Collections.singletonList(
-                row(4L, "六类网线", 2L, "线缆布线区", false, 600, 800, 200)));
+                row(4L, "六类网线", 2L, "线缆布线区", false, 600, 800, 200, false)));
 
         mockMvc.perform(get("/accessory/safety-stock").param("zoneTagId", "2"))
                 .andExpect(status().isOk())
@@ -89,12 +95,13 @@ class SafetyStockControllerTest {
     @Test
     void safetyStockFiltersUnassignedZoneOnly() throws Exception {
         when(accessoryService.listSafetyStockShortages(null, true)).thenReturn(Collections.singletonList(
-                row(30L, "未分配低位件", null, null, true, 5, 10, 5)));
+                row(30L, "未分配急件", null, null, true, 1, 10, 9, true)));
 
         mockMvc.perform(get("/accessory/safety-stock").param("unassignedZone", "true"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(1))
-                .andExpect(jsonPath("$.data[0].unassignedZone").value(true));
+                .andExpect(jsonPath("$.data[0].unassignedZone").value(true))
+                .andExpect(jsonPath("$.data[0].urgent").value(true));
 
         verify(accessoryService).listSafetyStockShortages(null, true);
     }
@@ -111,8 +118,8 @@ class SafetyStockControllerTest {
     @Test
     void safetyStockExportWritesFilteredRowsAndChineseFileName() throws Exception {
         when(accessoryService.listSafetyStockShortages(2L, false)).thenReturn(Arrays.asList(
-                row(4L, "六类网线", 2L, "线缆布线区", false, 600, 800, 200),
-                row(30L, "未分配低位件", null, null, true, 5, 10, 5)));
+                row(4L, "六类网线", 2L, "线缆布线区", false, 600, 800, 200, false),
+                row(30L, "未分配急件", null, null, true, 1, 10, 9, true)));
 
         String expectedFileName = "安全库存台账_"
                 + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE) + ".csv";
@@ -137,11 +144,11 @@ class SafetyStockControllerTest {
 
         String csv = new String(body, StandardCharsets.UTF_8);
         String[] lines = csv.split("\r\n");
-        // 列与页面一致：名称、分区、现存、下限、缺口
-        assertEquals("名称,分区,现存量,下限,缺口", lines[0].substring(1));
-        assertEquals("六类网线,线缆布线区,600,800,200", lines[1]);
-        // 未分配分区在导出文件中单独写作“未分配分区”，不允许出现空分区
-        assertEquals("未分配低位件,未分配分区,5,10,5", lines[2]);
+        // 列与页面一致：名称、分区、现存、下限、缺口、紧急
+        assertEquals("名称,分区,现存量,下限,缺口,紧急", lines[0].substring(1));
+        assertEquals("六类网线,线缆布线区,600,800,200,", lines[1]);
+        // 未分配分区在导出文件中单独写作“未分配分区”，不允许出现空分区；紧急行末列写“紧急”
+        assertEquals("未分配急件,未分配分区,1,10,9,紧急", lines[2]);
         // 筛选参数与页面台账同源透传
         verify(accessoryService).listSafetyStockShortages(2L, false);
     }
@@ -149,7 +156,7 @@ class SafetyStockControllerTest {
     @Test
     void safetyStockExportUnassignedOnlyWritesUnassignedRows() throws Exception {
         when(accessoryService.listSafetyStockShortages(null, true)).thenReturn(Collections.singletonList(
-                row(30L, "未分配低位件", null, null, true, 5, 10, 5)));
+                row(30L, "未分配急件", null, null, true, 1, 10, 9, true)));
 
         MvcResult result = mockMvc.perform(get("/accessory/safety-stock/export")
                         .param("unassignedZone", "true"))
@@ -158,8 +165,8 @@ class SafetyStockControllerTest {
 
         String csv = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
         String[] lines = csv.split("\r\n");
-        assertEquals("名称,分区,现存量,下限,缺口", lines[0].substring(1));
-        assertEquals("未分配低位件,未分配分区,5,10,5", lines[1]);
+        assertEquals("名称,分区,现存量,下限,缺口,紧急", lines[0].substring(1));
+        assertEquals("未分配急件,未分配分区,1,10,9,紧急", lines[1]);
         verify(accessoryService).listSafetyStockShortages(null, true);
     }
 
@@ -173,9 +180,9 @@ class SafetyStockControllerTest {
                 .andReturn();
 
         String csv = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
-        String[] lines = csv.split("\r\n");
-        // BOM + 表头，无数据行
+        // limit=-1 保留末尾空串：BOM + 表头 + CRLF，无数据行，共 2 段
+        String[] lines = csv.split("\r\n", -1);
         assertEquals(2, lines.length);
-        assertTrue(csv.endsWith("名称,分区,现存量,下限,缺口\r\n"));
+        assertTrue(csv.endsWith("名称,分区,现存量,下限,缺口,紧急\r\n"));
     }
 }

@@ -11,6 +11,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.List;
 import java.util.Map;
@@ -26,6 +27,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 安全库存台账链路集成测试（H2 MySQL 兼容模式，真实 SQL 落库）：
  * 仅已设下限且现存量低于下限的正常配件进台账；未设下限、已删除的不进；
  * 未分配分区低位不漏；改下限或现存量后实时重算，条数与缺口与档案一致。
+ * 同分区内按缺口从大到小排序，缺口达到下限一半及以上标为紧急；
+ * 换分区或改下限刷新后，顺序与紧急标记随新缺口一致（未分配分区同样生效）。
  */
 @SpringBootTest(properties = {
         "spring.datasource.driver-class-name=org.h2.Driver",
@@ -47,10 +50,26 @@ class SafetyStockShortageIT {
     @Autowired
     private ZoneTagMapper zoneTagMapper;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     private Long cableZoneId;
+    private Long bridgeZoneId;
 
     @BeforeEach
     void seed() {
+        // H2 内存库随 Spring 上下文复用，各测试方法共用同一库；
+        // 每个用例前先清空本类涉及的两张表，保证条数/顺序断言不被其他用例的种子数据污染
+        jdbcTemplate.update("DELETE FROM accessory");
+        jdbcTemplate.update("DELETE FROM zone_tag");
+        // 桥架分区排序号更小：用于验证全集顺序“先按分区排序号，再按区内缺口降序”
+        ZoneTag bridgeZone = new ZoneTag();
+        bridgeZone.setTagName("弱电桥架区");
+        bridgeZone.setTagCode("ZONE-BRIDGE-SS");
+        bridgeZone.setSortOrder(1);
+        zoneTagMapper.insert(bridgeZone);
+        bridgeZoneId = bridgeZone.getId();
+
         ZoneTag cableZone = new ZoneTag();
         cableZone.setTagName("线缆布线区");
         cableZone.setTagCode("ZONE-CABLE-SS");
@@ -98,6 +117,8 @@ class SafetyStockShortageIT {
         assertEquals(200, cat6.getGapQuantity());
         assertEquals("线缆布线区", cat6.getZoneTagName());
         assertFalse(cat6.getUnassignedZone());
+        // 缺口 200 不足下限 800 的一半（400）：普通行，非紧急
+        assertFalse(cat6.getUrgent());
 
         SafetyStockVO unassigned = byName.get("未分配低位件");
         assertTrue(unassigned.getUnassignedZone());
@@ -106,6 +127,8 @@ class SafetyStockShortageIT {
         assertEquals(5, unassigned.getStockQuantity());
         assertEquals(10, unassigned.getSafetyStock());
         assertEquals(5, unassigned.getGapQuantity());
+        // 缺口 5 恰好为下限 10 的一半（2*5>=10，边界含在内）：未分配分区同样标紧急
+        assertTrue(unassigned.getUrgent());
 
         // 未设下限、充足、已删除的都不进
         assertTrue(byName.keySet().stream().noneMatch(name ->
@@ -162,8 +185,8 @@ class SafetyStockShortageIT {
         // 给未分配低位件清掉下限：台账为空
         Accessory unassigned = accessoryMapper.selectOne(new com.baomidou.mybatisplus.core.conditions
                 .query.LambdaQueryWrapper<Accessory>().eq(Accessory::getModel, "NA-SS"));
-        unassigned.setSafetyStock(null);
-        accessoryMapper.updateById(unassigned);
+        // updateById 默认忽略 null 字段，清空下限需显式 SQL（与 service.update 内 updateSafetyStock 同理）
+        jdbcTemplate.update("UPDATE accessory SET safety_stock = NULL WHERE id = ?", unassigned.getId());
 
         assertTrue(accessoryService.listSafetyStockShortages(null, false).isEmpty());
     }
@@ -190,5 +213,121 @@ class SafetyStockShortageIT {
         List<SafetyStockVO> rows = accessoryService.listSafetyStockShortages(null, false);
         assertEquals(1, rows.size());
         assertEquals("未分配低位件", rows.get(0).getAccessoryName());
+    }
+
+    /** 紧急排序专用配件：用 ORD-SS- 型号前缀与种子数据隔离，各测试方法独立插入不影响断言 */
+    private Long insertSortAccessory(String name, String modelSuffix, Long zoneId,
+                                     int stock, int safetyStock) {
+        return insertAccessory(name, "ORD-SS-" + modelSuffix, zoneId, stock, safetyStock, 0);
+    }
+
+    private List<SafetyStockVO> sortRows() {
+        return accessoryService.listSafetyStockShortages(null, false).stream()
+                .filter(row -> row.getModel() != null && row.getModel().startsWith("ORD-SS-"))
+                .collect(Collectors.toList());
+    }
+
+    private Accessory findSortAccessory(String modelSuffix) {
+        return accessoryMapper.selectOne(new com.baomidou.mybatisplus.core.conditions
+                .query.LambdaQueryWrapper<Accessory>()
+                .eq(Accessory::getModel, "ORD-SS-" + modelSuffix));
+    }
+
+    @Test
+    void rowsSortedByGapDescWithinZoneAndUnassignedLastWithUrgentFlag() {
+        // 排序号更小的桥架分区：缺口 90（紧急）、缺口 50=下限一半（边界紧急）
+        insertSortAccessory("排序-桥架小缺口", "BRIDGE-SMALL", bridgeZoneId, 50, 100);
+        insertSortAccessory("排序-桥架大缺口", "BRIDGE-BIG", bridgeZoneId, 10, 100);
+        // 线缆分区（排序号 2）：缺口 40 < 下限 100 的一半，普通行
+        insertSortAccessory("排序-线缆普通件", "CABLE-NORMAL", cableZoneId, 60, 100);
+        // 未分配分区：缺口 9（紧急），未分配整体殿后
+        insertSortAccessory("排序-未分配急件", "NA-URGENT", null, 1, 10);
+
+        List<SafetyStockVO> rows = sortRows();
+
+        // 顺序：桥架分区（sortOrder=1）两条按缺口降序 → 线缆分区 → 未分配殿后
+        assertEquals(List.of("排序-桥架大缺口", "排序-桥架小缺口", "排序-线缆普通件", "排序-未分配急件"),
+                rows.stream().map(SafetyStockVO::getAccessoryName).collect(Collectors.toList()));
+
+        Map<String, SafetyStockVO> bySuffix = rows.stream().collect(Collectors.toMap(
+                row -> row.getModel().substring("ORD-SS-".length()), Function.identity()));
+        // 缺口 90 达下限 100 的 90%：紧急
+        assertTrue(bySuffix.get("BRIDGE-BIG").getUrgent());
+        // 缺口 50 恰好为下限一半：边界含在内，紧急
+        assertTrue(bySuffix.get("BRIDGE-SMALL").getUrgent());
+        // 缺口 40 不足下限一半：普通
+        assertFalse(bySuffix.get("CABLE-NORMAL").getUrgent());
+        // 未分配分区的急件同样按口径标紧急
+        assertTrue(bySuffix.get("NA-URGENT").getUrgent());
+        assertTrue(bySuffix.get("NA-URGENT").getUnassignedZone());
+    }
+
+    @Test
+    void changingLimitRefreshesOrderAndUrgentFlagToNewGap() {
+        // 同分区两个低位件：A 缺口 100（紧急），B 缺口 5（普通），A 在前
+        insertSortAccessory("排序-改限A件", "LIMIT-A", cableZoneId, 0, 100);
+        insertSortAccessory("排序-改限B件", "LIMIT-B", cableZoneId, 95, 100);
+
+        List<SafetyStockVO> before = sortRows();
+        assertEquals(List.of("排序-改限A件", "排序-改限B件"),
+                before.stream().map(SafetyStockVO::getAccessoryName).collect(Collectors.toList()));
+        assertTrue(before.get(0).getUrgent());
+        assertFalse(before.get(1).getUrgent());
+
+        // A 改下限 30、现存 16：缺口 14，2*14=28 < 30，由紧急转普通
+        Accessory a = findSortAccessory("LIMIT-A");
+        a.setSafetyStock(30);
+        a.setStockQuantity(16);
+        accessoryMapper.updateById(a);
+        // B 现存调到 80：缺口 20，仍普通，但缺口反超 A
+        Accessory b = findSortAccessory("LIMIT-B");
+        b.setStockQuantity(80);
+        accessoryMapper.updateById(b);
+
+        List<SafetyStockVO> after = sortRows();
+        // 顺序随新缺口翻转：B(20) 在 A(14) 前
+        assertEquals(List.of("排序-改限B件", "排序-改限A件"),
+                after.stream().map(SafetyStockVO::getAccessoryName).collect(Collectors.toList()));
+        Map<String, SafetyStockVO> bySuffix = after.stream().collect(Collectors.toMap(
+                row -> row.getModel().substring("ORD-SS-".length()), Function.identity()));
+        assertEquals(20, bySuffix.get("LIMIT-B").getGapQuantity());
+        assertFalse(bySuffix.get("LIMIT-B").getUrgent());
+        assertEquals(14, bySuffix.get("LIMIT-A").getGapQuantity());
+        // 紧急标记随改下限后的新缺口翻转
+        assertFalse(bySuffix.get("LIMIT-A").getUrgent());
+    }
+
+    @Test
+    void movingAccessoryAcrossZonesRefreshesGroupAndUrgentFlag() {
+        // 桥架分区一个缺口 90 的紧急件
+        Long id = insertSortAccessory("排序-换分区件", "ZONE-MOVE", bridgeZoneId, 10, 100);
+
+        List<SafetyStockVO> before = sortRows();
+        assertEquals(1, before.size());
+        assertEquals(bridgeZoneId, before.get(0).getZoneTagId());
+        assertTrue(before.get(0).getUrgent());
+
+        // 移到未分配分区并把下限下调：刷新后归到未分配组（全集殿后）、标记按新缺口重算。
+        // updateById 默认忽略 null 字段，置空分区必须显式 SQL（与 service.updateZone 落库路径一致）
+        jdbcTemplate.update(
+                "UPDATE accessory SET zone_tag_id = NULL, safety_stock = 10, stock_quantity = 8 WHERE id = ?",
+                id);
+
+        List<SafetyStockVO> after = sortRows();
+        assertEquals(1, after.size());
+        SafetyStockVO row = after.get(0);
+        assertTrue(row.getUnassignedZone());
+        assertNull(row.getZoneTagId());
+        // 缺口 2 < 下限 10 的一半：不再紧急
+        assertFalse(row.getUrgent());
+        assertEquals(2, row.getGapQuantity());
+
+        // 只筛未分配分区时同样能取到，排序/标记规则一致
+        List<SafetyStockVO> unassignedOnly = accessoryService.listSafetyStockShortages(null, true)
+                .stream()
+                .filter(r -> "ORD-SS-ZONE-MOVE".equals(r.getModel()))
+                .collect(Collectors.toList());
+        assertEquals(1, unassignedOnly.size());
+        assertFalse(unassignedOnly.get(0).getUrgent());
     }
 }

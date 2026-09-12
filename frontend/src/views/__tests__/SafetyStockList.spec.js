@@ -36,6 +36,8 @@ const rows = () => [
     stockQuantity: 80,
     safetyStock: 100,
     gapQuantity: 20,
+    // 缺口 20 < 下限一半（50）：普通
+    urgent: false,
     unassignedZone: false
   },
   {
@@ -48,6 +50,8 @@ const rows = () => [
     stockQuantity: 600,
     safetyStock: 800,
     gapQuantity: 200,
+    // 缺口 200 < 下限一半（400）：普通
+    urgent: false,
     unassignedZone: false
   },
   {
@@ -60,6 +64,8 @@ const rows = () => [
     stockQuantity: 5,
     safetyStock: 10,
     gapQuantity: 5,
+    // 缺口 5 恰好为下限一半（2*5>=10）：紧急，未分配分区同样生效
+    urgent: true,
     unassignedZone: true
   }
 ]
@@ -162,6 +168,7 @@ describe('安全库存台账', () => {
         stockQuantity: 600,
         safetyStock: 800,
         gapQuantity: 200,
+        urgent: false,
         unassignedZone: false
       }
     ])
@@ -194,6 +201,7 @@ describe('安全库存台账', () => {
         stockQuantity: 5,
         safetyStock: 10,
         gapQuantity: 5,
+        urgent: true,
         unassignedZone: true
       }
     ])
@@ -260,6 +268,7 @@ describe('安全库存台账', () => {
         stockQuantity: 5,
         safetyStock: 10,
         gapQuantity: 5,
+        urgent: true,
         unassignedZone: true
       }
     ])
@@ -298,6 +307,195 @@ describe('安全库存台账', () => {
     expect(wrapper.find('.summary-tags').text()).toContain('缺口合计 0 件')
     expect(wrapper.find('.el-empty').exists()).toBe(true)
     expect(wrapper.text()).toContain('已分配分区暂无低于下限的配件')
+
+    wrapper.unmount()
+  })
+
+  // 同分区内两个低位件：后端已按“分区排序号 + 区内缺口降序 + 未分配殿后”排好序返回，
+  // 前端保持该顺序渲染；前端不再二次排序，顺序口径以台账接口为唯一来源
+  const gapSortedRows = () => [
+    {
+      accessoryId: 11,
+      accessoryName: '紧急桥架件',
+      model: 'U-1',
+      specUnit: 'mm',
+      zoneTagId: 1,
+      zoneTagName: '弱电桥架区',
+      stockQuantity: 10,
+      safetyStock: 100,
+      gapQuantity: 90,
+      // 90 >= 50：紧急
+      urgent: true,
+      unassignedZone: false
+    },
+    {
+      accessoryId: 10,
+      accessoryName: '普通桥架件',
+      model: 'P-1',
+      specUnit: 'mm',
+      zoneTagId: 1,
+      zoneTagName: '弱电桥架区',
+      stockQuantity: 60,
+      safetyStock: 100,
+      gapQuantity: 40,
+      // 40 < 50：普通
+      urgent: false,
+      unassignedZone: false
+    },
+    {
+      accessoryId: 40,
+      accessoryName: '未分配急件',
+      model: 'NA-U',
+      specUnit: null,
+      zoneTagId: null,
+      zoneTagName: null,
+      stockQuantity: 0,
+      safetyStock: 10,
+      gapQuantity: 10,
+      // 未分配分区：缺口达下限一半以上同样标紧急
+      urgent: true,
+      unassignedZone: true
+    }
+  ]
+
+  it('同分区内按缺口从大到小展示，紧急件打紧急标签并用紧急行底纹', async () => {
+    getSafetyStockShortages.mockResolvedValue(gapSortedRows())
+    const wrapper = mount(SafetyStockList, {
+      global: { plugins: [ElementPlus], components: { ...Icons } }
+    })
+    await flushPromises()
+
+    // 已分配表两行：缺口 90 的紧急桥架件必须排在缺口 40 的普通行之前
+    const assignedNames = wrapper
+      .findAll('.assigned-table tbody tr')
+      .map((tr) => tr.find('td:first-child').text().trim())
+    expect(assignedNames).toEqual(['紧急桥架件', '普通桥架件'])
+
+    const assignedTrs = wrapper.findAll('.assigned-table tbody tr')
+    expect(assignedTrs[0].classes()).toContain('urgent-row')
+    expect(assignedTrs[1].classes()).toContain('shortage-row')
+    // 紧急行缺口格带红色“紧急”标签，普通行不带
+    expect(assignedTrs[0].text()).toContain('紧急')
+    expect(assignedTrs[1].text()).not.toContain('紧急')
+
+    // 未分区分组里的急件同样标紧急、用紧急行底纹
+    const section = wrapper.find('.unassigned-section')
+    expect(section.text()).toContain('未分配急件')
+    const unassignedTr = section.find('tbody tr')
+    expect(unassignedTr.text()).toContain('紧急')
+    expect(unassignedTr.classes()).toContain('urgent-row')
+
+    // 汇总标签统计当前全集紧急件数：桥架急件 + 未分配急件 = 2
+    expect(wrapper.find('.summary-tags').text()).toContain('紧急 2 种')
+
+    wrapper.unmount()
+  })
+
+  it('换到具体分区后顺序与紧急标记按新分区缺口展示', async () => {
+    getSafetyStockShortages.mockResolvedValue(gapSortedRows())
+    const wrapper = mount(SafetyStockList, {
+      global: { plugins: [ElementPlus], components: { ...Icons } }
+    })
+    await flushPromises()
+
+    getSafetyStockShortages.mockClear()
+    // 弱电桥架区刷新后：两个低位件，缺口 90 的紧急在前，缺口 20 的普通在后
+    getSafetyStockShortages.mockResolvedValue([
+      {
+        accessoryId: 11,
+        accessoryName: '紧急桥架件',
+        model: 'U-1',
+        specUnit: 'mm',
+        zoneTagId: 1,
+        zoneTagName: '弱电桥架区',
+        stockQuantity: 10,
+        safetyStock: 100,
+        gapQuantity: 90,
+        urgent: true,
+        unassignedZone: false
+      },
+      {
+        accessoryId: 12,
+        accessoryName: '新增普通桥架件',
+        model: 'P-2',
+        specUnit: 'mm',
+        zoneTagId: 1,
+        zoneTagName: '弱电桥架区',
+        stockQuantity: 80,
+        safetyStock: 100,
+        gapQuantity: 20,
+        urgent: false,
+        unassignedZone: false
+      }
+    ])
+
+    await selectOption(wrapper, '弱电桥架区')
+
+    expect(getSafetyStockShortages).toHaveBeenCalledWith({ zoneTagId: 1 })
+    const names = wrapper
+      .findAll('.assigned-table tbody tr')
+      .map((tr) => tr.find('td:first-child').text().trim())
+    expect(names).toEqual(['紧急桥架件', '新增普通桥架件'])
+    const trs = wrapper.findAll('.assigned-table tbody tr')
+    expect(trs[0].classes()).toContain('urgent-row')
+    expect(trs[1].classes()).toContain('shortage-row')
+    expect(wrapper.find('.summary-tags').text()).toContain('紧急 1 种')
+
+    wrapper.unmount()
+  })
+
+  it('改下限后库存变更通知刷新，顺序与紧急标记跟新缺口一致', async () => {
+    getSafetyStockShortages.mockResolvedValue(gapSortedRows())
+    const wrapper = mount(SafetyStockList, {
+      global: { plugins: [ElementPlus], components: { ...Icons } }
+    })
+    await flushPromises()
+    expect(
+      wrapper.findAll('.assigned-table tbody tr').map((tr) => tr.find('td:first-child').text().trim())
+    ).toEqual(['紧急桥架件', '普通桥架件'])
+
+    // 改下限/现存后后端重算：原普通件缺口变大转紧急并升到第一；原紧急件缺口降到不足一半转普通
+    getSafetyStockShortages.mockResolvedValueOnce([
+      {
+        accessoryId: 10,
+        accessoryName: '普通桥架件',
+        model: 'P-1',
+        specUnit: 'mm',
+        zoneTagId: 1,
+        zoneTagName: '弱电桥架区',
+        stockQuantity: 0,
+        safetyStock: 100,
+        gapQuantity: 100,
+        urgent: true,
+        unassignedZone: false
+      },
+      {
+        accessoryId: 11,
+        accessoryName: '紧急桥架件',
+        model: 'U-1',
+        specUnit: 'mm',
+        zoneTagId: 1,
+        zoneTagName: '弱电桥架区',
+        stockQuantity: 60,
+        safetyStock: 100,
+        gapQuantity: 40,
+        urgent: false,
+        unassignedZone: false
+      }
+    ])
+    notifyStockChanged('accessory')
+    await flushPromises()
+
+    const trs = wrapper.findAll('.assigned-table tbody tr')
+    expect(trs.map((tr) => tr.find('td:first-child').text().trim())).toEqual([
+      '普通桥架件',
+      '紧急桥架件'
+    ])
+    // 紧急底纹跟着新缺口走：新缺口 100 的行紧急，40 的行普通
+    expect(trs[0].classes()).toContain('urgent-row')
+    expect(trs[1].classes()).toContain('shortage-row')
+    expect(trs[0].text()).toContain('100')
+    expect(trs[1].text()).toContain('40')
 
     wrapper.unmount()
   })
@@ -368,6 +566,7 @@ describe('安全库存台账 - 导出当前分区', () => {
         stockQuantity: 600,
         safetyStock: 800,
         gapQuantity: 200,
+        urgent: false,
         unassignedZone: false
       }
     ])
@@ -405,6 +604,7 @@ describe('安全库存台账 - 导出当前分区', () => {
         stockQuantity: 5,
         safetyStock: 10,
         gapQuantity: 5,
+        urgent: true,
         unassignedZone: true
       }
     ])
