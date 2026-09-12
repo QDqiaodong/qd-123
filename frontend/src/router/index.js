@@ -28,6 +28,12 @@ const routes = [
     name: 'StockGap',
     component: () => import('@/views/StockGapList.vue'),
     meta: { title: '库存缺口分析' }
+  },
+  {
+    path: '/stock-check',
+    name: 'StockCheck',
+    component: () => import('@/views/StockCheckList.vue'),
+    meta: { title: '分区盘点' }
   }
 ]
 

@@ -180,6 +180,58 @@ CREATE TABLE IF NOT EXISTS `zone_adjust_log` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='配件分区调整流水表';
 
 -- ----------------------------
+-- 分区盘点单表（幂等建表）
+-- 按分区开盘：zone_tag_id 为 NULL 表示“未分配分区”；同一分区允许重复盘点，
+-- 但同一分区同时只允许一张待确认盘点单（uk_pending_zone 仅作用于 status=0）。
+-- status=0 待确认（可反复登记实盘数，不动库存）；status=1 已确认（库存已一次性回写，单据只读）
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `stock_check` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `check_no` varchar(40) NOT NULL COMMENT '盘点单号（业务编号，快照展示）',
+  `zone_tag_id` bigint DEFAULT NULL COMMENT '盘点分区标签ID，NULL 表示未分配分区',
+  `zone_name` varchar(100) NOT NULL COMMENT '分区名称（开盘时快照，分区标签删除后仍可展示）',
+  `unassigned_zone` tinyint NOT NULL DEFAULT 0 COMMENT '是否未分配分区：0-否，1-是',
+  `status` tinyint NOT NULL DEFAULT 0 COMMENT '状态：0-待确认（可登记实盘数），1-已确认（库存已回写，单据只读）',
+  `item_count` int NOT NULL DEFAULT 0 COMMENT '明细配件种数（含已删除配件）',
+  `diff_count` int NOT NULL DEFAULT 0 COMMENT '盘盈盘亏配件种数（已删除配件不参与）',
+  `confirm_remark` varchar(500) DEFAULT NULL COMMENT '确认备注',
+  `confirm_time` datetime DEFAULT NULL COMMENT '确认回写时间',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  -- 生成列：仅待确认单取分区ID（未分配分区用 0 占位），已确认单恒为 NULL；
+  -- 配合唯一索引实现“同一分区同时只允许一张待确认盘点单”，MySQL 唯一索引允许多个 NULL，
+  -- 故同一分区历史上可保留多张已确认盘点单
+  `pending_zone_key` bigint GENERATED ALWAYS AS (IF(`status` = 0, COALESCE(`zone_tag_id`, 0), NULL)) VIRTUAL COMMENT '待确认单分区唯一键（生成列）',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_check_no` (`check_no`),
+  UNIQUE KEY `uk_pending_zone` (`pending_zone_key`),
+  KEY `idx_status` (`status`),
+  KEY `idx_zone_tag_id` (`zone_tag_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='分区盘点单表';
+
+-- ----------------------------
+-- 分区盘点单明细表（幂等建表）
+-- 开盘时按分区把配件（含已软删除配件）全部带入并快照账面现存量；
+-- 实盘数可反复登记，差异 = 实盘 - 账面；已删除配件只展示，确认时不回写库存
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `stock_check_item` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `check_id` bigint NOT NULL COMMENT '盘点单ID',
+  `accessory_id` bigint NOT NULL COMMENT '配件ID',
+  `accessory_name` varchar(200) NOT NULL COMMENT '配件名称（开盘时快照）',
+  `model` varchar(200) NOT NULL COMMENT '型号（开盘时快照）',
+  `spec_unit` varchar(20) DEFAULT NULL COMMENT '规格单位（开盘时快照）',
+  `book_quantity` int NOT NULL COMMENT '账面现存量（开盘时快照）',
+  `actual_quantity` int DEFAULT NULL COMMENT '实盘数量，NULL 表示尚未登记',
+  `accessory_deleted` tinyint NOT NULL DEFAULT 0 COMMENT '配件是否已删除：0-正常，1-已删除（只展示不回写）',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_check_accessory` (`check_id`, `accessory_id`),
+  KEY `idx_check_id` (`check_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='分区盘点单明细表';
+
+-- ----------------------------
 -- 初始化布线方案数据（幂等插入，按唯一键 plan_name 去重）
 -- ----------------------------
 INSERT IGNORE INTO `wiring_plan` (`id`, `plan_name`, `scene`, `description`, `status`) VALUES

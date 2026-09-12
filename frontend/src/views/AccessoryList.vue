@@ -219,7 +219,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Plus, Goods } from '@element-plus/icons-vue'
 import {
@@ -230,7 +230,7 @@ import {
   updateAccessoryZone
 } from '@/api/accessory'
 import { getZoneTagList } from '@/api/zoneTag'
-import { notifyStockChanged } from '@/utils/stockSync'
+import { notifyStockChanged, onStockChanged } from '@/utils/stockSync'
 
 const tableData = ref([])
 const zoneTagList = ref([])
@@ -405,9 +405,30 @@ const handleZoneSubmit = async () => {
   notifyStockChanged('accessory')
 }
 
+// 分区盘点确认回写后，配件档案现存量需与最近一次已确认盘点一致，
+// 监听库存变更立即重拉；bfcache 恢复（前进/后退）时同样主动重拉
+const handleStockChanged = () => {
+  loadData()
+}
+
+const handlePageShow = (event) => {
+  if (event.persisted) {
+    loadData()
+  }
+}
+
+let unsubscribeStockChanged = null
+
 onMounted(() => {
   loadZoneTagList()
   loadData()
+  unsubscribeStockChanged = onStockChanged(handleStockChanged)
+  window.addEventListener('pageshow', handlePageShow)
+})
+
+onBeforeUnmount(() => {
+  unsubscribeStockChanged?.()
+  window.removeEventListener('pageshow', handlePageShow)
 })
 </script>
 
