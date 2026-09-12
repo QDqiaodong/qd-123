@@ -282,6 +282,12 @@ const loadData = async () => {
   })
   tableData.value = res.records
   pagination.total = res.total
+  // 越界兜底：total 还有数据但当前页为空（翻到后页改条数、删完本页数据等），
+  // 不能把空表当成没有数据，回到第一页按原筛选重拉
+  if (res.records.length === 0 && res.total > 0 && pagination.pageNum > 1) {
+    pagination.pageNum = 1
+    await loadData()
+  }
 }
 
 const loadZoneTagList = async () => {
@@ -307,6 +313,8 @@ const handleReset = () => {
 
 const handleSizeChange = (size) => {
   pagination.pageSize = size
+  // 改每页条数后回到第一页，避免后页页码超出新总页数拿到空表；关键词/分区筛选保持不变
+  pagination.pageNum = 1
   loadData()
 }
 

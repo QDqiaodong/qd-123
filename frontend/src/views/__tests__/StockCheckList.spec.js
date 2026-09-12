@@ -232,6 +232,90 @@ describe('分区盘点 - 列表', () => {
   })
 })
 
+describe('分区盘点 - 分页与改每页条数', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    __resetStockListenersForTests()
+    document.body.innerHTML = ''
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('后页修改每页条数：回到第一页并保留分区/状态筛选重新查询', async () => {
+    const wrapper = await mountPage()
+    // 带着“线缆布线区 + 待确认”筛选翻到第 3 页
+    wrapper.vm.searchForm.zoneTagId = 2
+    wrapper.vm.searchForm.status = 0
+    wrapper.vm.pagination.pageNum = 3
+    getStockCheckPage.mockClear()
+    getStockCheckPage.mockResolvedValue(pendingPage())
+
+    wrapper.vm.handleSizeChange(20)
+    await flushPromises()
+
+    expect(wrapper.vm.pagination.pageNum).toBe(1)
+    expect(wrapper.vm.pagination.pageSize).toBe(20)
+    // 分区与状态筛选不能丢
+    expect(wrapper.vm.searchForm.zoneTagId).toBe(2)
+    expect(wrapper.vm.searchForm.status).toBe(0)
+    expect(getStockCheckPage).toHaveBeenCalledTimes(1)
+    expect(getStockCheckPage).toHaveBeenCalledWith({
+      pageNum: 1,
+      pageSize: 20,
+      status: 0,
+      zoneTagId: 2
+    })
+    wrapper.unmount()
+  })
+
+  it('当前页越界拿到空记录但 total>0 时，自动回第一页按原筛选重拉', async () => {
+    const wrapper = await mountPage()
+    // 未分配分区（占位值 0）+ 已确认，停在不存在的第 5 页
+    wrapper.vm.searchForm.zoneTagId = 0
+    wrapper.vm.searchForm.status = 1
+    wrapper.vm.pagination.pageNum = 5
+    getStockCheckPage.mockClear()
+    getStockCheckPage
+      .mockResolvedValueOnce({ records: [], total: 12 })
+      .mockResolvedValueOnce(pendingPage())
+
+    wrapper.vm.loadData()
+    await flushPromises()
+    await flushPromises()
+
+    // 先用越界页码按原筛选查，再自动回到第一页按同一筛选重拉
+    expect(getStockCheckPage).toHaveBeenCalledTimes(2)
+    expect(getStockCheckPage.mock.calls[0]).toEqual([
+      { pageNum: 5, pageSize: 10, status: 1, unassigned: true }
+    ])
+    expect(getStockCheckPage.mock.calls[1]).toEqual([
+      { pageNum: 1, pageSize: 10, status: 1, unassigned: true }
+    ])
+    expect(wrapper.vm.pagination.pageNum).toBe(1)
+    // 重拉后单据回来了，不拿空表当没单
+    expect(wrapper.findAll('.el-table__row').length).toBe(2)
+    wrapper.unmount()
+  })
+
+  it('筛选确实无单（total 为 0）时不重拉，表格就是正常空态', async () => {
+    const wrapper = await mountPage()
+    wrapper.vm.searchForm.zoneTagId = 2
+    wrapper.vm.searchForm.status = 0
+    getStockCheckPage.mockClear()
+    getStockCheckPage.mockResolvedValue({ records: [], total: 0 })
+
+    wrapper.vm.handleSearch()
+    await flushPromises()
+
+    expect(getStockCheckPage).toHaveBeenCalledTimes(1)
+    expect(wrapper.vm.pagination.pageNum).toBe(1)
+    expect(wrapper.findAll('.el-table__row').length).toBe(0)
+    wrapper.unmount()
+  })
+})
+
 describe('分区盘点 - 开盘', () => {
   beforeEach(() => {
     vi.clearAllMocks()

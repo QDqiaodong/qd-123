@@ -361,6 +361,12 @@ const loadData = async () => {
     const res = await getStockCheckPage(params)
     tableData.value = res.records
     pagination.total = res.total
+    // 越界兜底：total 还有数据但当前页为空（页码超出总页数，如翻到后页改条数、删完本页单据），
+    // 不能把空表当成“没有单”，回到第一页按原分区/状态筛选重拉
+    if (res.records.length === 0 && res.total > 0 && pagination.pageNum > 1) {
+      pagination.pageNum = 1
+      await loadData()
+    }
   } finally {
     loading.value = false
   }
@@ -384,6 +390,9 @@ const handleReset = () => {
 
 const handleSizeChange = (size) => {
   pagination.pageSize = size
+  // 改每页条数后必须回到第一页：否则停留在后页时新页码可能超出总页数，拿到空表被误判为没有单。
+  // searchForm 不动，分区与状态筛选继续带上
+  pagination.pageNum = 1
   loadData()
 }
 
