@@ -6,6 +6,7 @@ import com.factory.security.dto.WiringPlanDTO;
 import com.factory.security.service.WiringPlanService;
 import com.factory.security.util.CsvExporter;
 import com.factory.security.vo.StockGapVO;
+import com.factory.security.vo.StockGapZoneSummaryVO;
 import com.factory.security.vo.WiringPlanExportRowVO;
 import com.factory.security.vo.WiringPlanVO;
 import jakarta.servlet.http.HttpServletResponse;
@@ -28,6 +29,10 @@ public class WiringPlanController {
 
     private static final String[] EXPORT_HEADERS = {
             "方案名称", "适用场景", "启用状态", "配件名称", "所属分区", "需求数量", "规格单位"
+    };
+
+    private static final String[] ZONE_SUMMARY_EXPORT_HEADERS = {
+            "分区名称", "涉及配件种数", "缺口件数"
     };
 
     @Autowired
@@ -91,6 +96,53 @@ public class WiringPlanController {
     @GetMapping("/stock-gaps")
     public Result<List<StockGapVO>> listStockGaps() {
         return Result.success(wiringPlanService.listStockGaps());
+    }
+
+    /**
+     * 库存缺口按分区汇总：缺口件数与涉及配件种数，未分配分区单独一行；
+     * 与缺口列表同一口径，必须声明在 /{id} 之前，避免被当作方案 ID 匹配
+     */
+    @GetMapping("/stock-gaps/zone-summary")
+    public Result<List<StockGapZoneSummaryVO>> listStockGapZoneSummary() {
+        return Result.success(wiringPlanService.listStockGapZoneSummary());
+    }
+
+    /**
+     * 导出缺口分区汇总 CSV：分区小计逐行列出，末尾追加合计行；
+     * 与页面“按分区汇总”表格同源，刷新后页面合计、分区小计与导出文件一致。
+     * 空汇总也返回 CSV（表头 + 合计 0 行），文件名含中文使用 RFC 5987 filename* 编码
+     */
+    @GetMapping("/stock-gaps/zone-summary/export")
+    public void exportStockGapZoneSummary(HttpServletResponse response) throws IOException {
+        List<StockGapZoneSummaryVO> rows = wiringPlanService.listStockGapZoneSummary();
+
+        List<String[]> dataRows = new ArrayList<>();
+        int totalAccessoryCount = 0;
+        int totalGapQuantity = 0;
+        for (StockGapZoneSummaryVO row : rows) {
+            int accessoryCount = row.getShortageAccessoryCount() == null ? 0 : row.getShortageAccessoryCount();
+            int gapQuantity = row.getGapQuantityTotal() == null ? 0 : row.getGapQuantityTotal();
+            totalAccessoryCount += accessoryCount;
+            totalGapQuantity += gapQuantity;
+            dataRows.add(new String[]{
+                    row.getZoneTagName(),
+                    String.valueOf(accessoryCount),
+                    String.valueOf(gapQuantity)
+            });
+        }
+        // 合计行：与页面汇总表合计行同一口径（分区小计之和）
+        dataRows.add(new String[]{"合计", String.valueOf(totalAccessoryCount), String.valueOf(totalGapQuantity)});
+
+        String datePart = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
+        String chineseFileName = "库存缺口分区汇总_" + datePart + ".csv";
+        String encodedFileName = URLEncoder.encode(chineseFileName, StandardCharsets.UTF_8).replace("+", "%20");
+
+        response.setContentType("text/csv; charset=UTF-8");
+        response.setCharacterEncoding("UTF-8");
+        response.setHeader("Content-Disposition",
+                "attachment; filename=\"stock-gap-zone-summary-" + datePart + ".csv\"; "
+                        + "filename*=UTF-8''" + encodedFileName);
+        CsvExporter.write(response.getOutputStream(), ZONE_SUMMARY_EXPORT_HEADERS, dataRows);
     }
 
     /**

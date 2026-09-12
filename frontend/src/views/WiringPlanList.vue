@@ -305,6 +305,7 @@ import {
 } from '@/api/wiringPlan'
 import { getAccessoryPage } from '@/api/accessory'
 import { onStockChanged, notifyStockChanged } from '@/utils/stockSync'
+import { resolveExportFileName, triggerBrowserDownload, truncateFileName } from '@/utils/csvDownload'
 
 const tableData = ref([])
 const accessoryList = ref([])
@@ -429,19 +430,6 @@ const loadAccessoryList = async () => {
 }
 
 // 导出文件名主体最长保留 80 个字符（含扩展名），防止超长关键词拼出的文件名超出文件系统限制
-const MAX_FILENAME_LENGTH = 80
-
-// 超长时截断文件名主体并保留 .csv 扩展名
-const truncateFileName = (name) => {
-  if (!name || name.length <= MAX_FILENAME_LENGTH) {
-    return name
-  }
-  const dotIndex = name.lastIndexOf('.')
-  const ext = dotIndex >= 0 ? name.slice(dotIndex) : ''
-  const stem = dotIndex >= 0 ? name.slice(0, dotIndex) : name
-  return stem.slice(0, MAX_FILENAME_LENGTH - ext.length) + ext
-}
-
 const buildFallbackFileName = () => {
   const date = new Date()
   const pad = (n) => String(n).padStart(2, '0')
@@ -451,40 +439,6 @@ const buildFallbackFileName = () => {
   const statusPart = searchForm.status === 1 ? '_启用' : searchForm.status === 0 ? '_停用' : ''
   const main = `布线方案导出${keywordPart}${statusPart}_${datePart}.csv`
   return truncateFileName(main)
-}
-
-// 优先使用后端返回的中文文件名（Content-Disposition: filename*），解析失败或超长时使用前端兜底名
-const resolveExportFileName = (contentDisposition) => {
-  const fallback = buildFallbackFileName()
-  if (!contentDisposition) {
-    return fallback
-  }
-  const starMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
-  if (starMatch && starMatch[1]) {
-    try {
-      const name = decodeURIComponent(starMatch[1])
-      return truncateFileName(name) || fallback
-    } catch (e) {
-      return fallback
-    }
-  }
-  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
-  if (plainMatch && plainMatch[1] && /[一-龥]/.test(plainMatch[1])) {
-    return truncateFileName(plainMatch[1])
-  }
-  return fallback
-}
-
-const triggerBrowserDownload = (blob, fileName) => {
-  const url = window.URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = fileName
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  // 释放 Blob URL，避免内存泄漏
-  window.URL.revokeObjectURL(url)
 }
 
 const handleExport = async () => {
@@ -509,7 +463,10 @@ const handleExport = async () => {
       keyword: searchForm.keyword,
       status: searchForm.status
     })
-    const fileName = resolveExportFileName(response.headers['content-disposition'])
+    const fileName = resolveExportFileName(
+      response.headers['content-disposition'],
+      buildFallbackFileName()
+    )
     triggerBrowserDownload(response.data, fileName)
     ElMessage.success('导出成功')
   } catch (e) {

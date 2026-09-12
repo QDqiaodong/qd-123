@@ -1,15 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import * as Icons from '@element-plus/icons-vue'
 import StockGapList from '@/views/StockGapList.vue'
-import { getStockGaps, getWiringPlanPage } from '@/api/wiringPlan'
+import {
+  getStockGaps,
+  getStockGapZoneSummary,
+  exportStockGapZoneSummary,
+  getWiringPlanPage
+} from '@/api/wiringPlan'
 import { notifyStockChanged, __resetStockListenersForTests } from '@/utils/stockSync'
 
 vi.mock('@/api/wiringPlan', () => ({
   getStockGaps: vi.fn(),
+  getStockGapZoneSummary: vi.fn(),
+  exportStockGapZoneSummary: vi.fn(),
   getWiringPlanPage: vi.fn()
 }))
+
+vi.mock('element-plus', async (importOriginal) => {
+  const actual = await importOriginal()
+  return {
+    ...actual,
+    ElMessage: {
+      success: vi.fn(),
+      error: vi.fn(),
+      warning: vi.fn()
+    }
+  }
+})
 
 const gapRows = () => [
   {
@@ -70,8 +89,34 @@ const gapRows = () => [
   }
 ]
 
+// 与 gapRows 同源的分区汇总：线缆布线区缺口 1 种 100 件，监控设备区与未分配分区无缺口
+const zoneSummaryRows = () => [
+  {
+    zoneTagId: 2,
+    zoneTagName: '线缆布线区',
+    unassignedZone: false,
+    shortageAccessoryCount: 1,
+    gapQuantityTotal: 100
+  },
+  {
+    zoneTagId: 5,
+    zoneTagName: '监控设备区',
+    unassignedZone: false,
+    shortageAccessoryCount: 0,
+    gapQuantityTotal: 0
+  },
+  {
+    zoneTagId: null,
+    zoneTagName: '未分配分区',
+    unassignedZone: true,
+    shortageAccessoryCount: 0,
+    gapQuantityTotal: 0
+  }
+]
+
 const mountPage = async () => {
   getStockGaps.mockResolvedValue(gapRows())
+  getStockGapZoneSummary.mockResolvedValue(zoneSummaryRows())
   getWiringPlanPage.mockResolvedValue({
     records: [{ id: 1, writeoff: true }, { id: 2, writeoff: false }],
     total: 2
@@ -90,6 +135,7 @@ describe('库存缺口分析', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     __resetStockListenersForTests()
+    getStockGapZoneSummary.mockResolvedValue([])
   })
 
   it('挂载时加载缺口列表', async () => {
@@ -233,6 +279,204 @@ describe('库存缺口分析', () => {
 
     expect(wrapper.find('.unassigned-section .el-empty').exists()).toBe(true)
     expect(wrapper.find('.summary-tags').text()).toContain('未分配分区 0 种')
+
+    wrapper.unmount()
+  })
+
+  it('按分区汇总展示小计与合计，未分配分区单独一行', async () => {
+    const wrapper = await mountPage()
+
+    const card = wrapper.find('.zone-summary-card')
+    expect(card.exists()).toBe(true)
+    const bodyRows = card.findAll('.el-table__body-wrapper tbody tr')
+    // 3 个分区行：线缆布线区、监控设备区、未分配分区（单独一行）
+    expect(bodyRows.length).toBe(3)
+    expect(bodyRows[0].text()).toContain('线缆布线区')
+    expect(bodyRows[0].text()).toContain('100')
+    expect(bodyRows[1].text()).toContain('监控设备区')
+    expect(bodyRows[2].text()).toContain('未分配分区')
+    expect(bodyRows[2].classes()).toContain('unassigned-zone-row')
+
+    // 合计行：涉及配件种数 1、缺口件数 100，与分区小计之和一致
+    const summaryRow = card.findAll('tr').find((r) => r.text().includes('合计'))
+    expect(summaryRow).toBeTruthy()
+    expect(summaryRow.text()).toContain('1')
+    expect(summaryRow.text()).toContain('100')
+
+    wrapper.unmount()
+  })
+
+  it('刷新后分区汇总与缺口明细同步重拉', async () => {
+    const wrapper = await mountPage()
+    expect(getStockGapZoneSummary).toHaveBeenCalledTimes(1)
+
+    const refreshBtn = wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('刷新'))
+    await refreshBtn.trigger('click')
+    await flushPromises()
+
+    expect(getStockGaps).toHaveBeenCalledTimes(2)
+    expect(getStockGapZoneSummary).toHaveBeenCalledTimes(2)
+
+    wrapper.unmount()
+  })
+
+  it('库存变更后分区汇总随明细一起重算', async () => {
+    const wrapper = await mountPage()
+
+    getStockGapZoneSummary.mockResolvedValueOnce([
+      {
+        zoneTagId: 2,
+        zoneTagName: '线缆布线区',
+        unassignedZone: false,
+        shortageAccessoryCount: 0,
+        gapQuantityTotal: 0
+      }
+    ])
+    notifyStockChanged('accessory')
+    await flushPromises()
+
+    expect(getStockGapZoneSummary).toHaveBeenCalledTimes(2)
+    const card = wrapper.find('.zone-summary-card')
+    const summaryRow = card.findAll('tr').find((r) => r.text().includes('合计'))
+    expect(summaryRow.text()).toContain('0')
+
+    wrapper.unmount()
+  })
+})
+
+describe('库存缺口分析 - 导出分区汇总', () => {
+  let clickSpy
+  let capturedDownload
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    __resetStockListenersForTests()
+    getStockGapZoneSummary.mockResolvedValue([])
+    capturedDownload = null
+    // jsdom 未实现 Blob URL API，补齐为可断言的 mock
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => 'blob:mock-url')
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      writable: true,
+      value: vi.fn()
+    })
+    clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () {
+      capturedDownload = this.download
+    })
+  })
+
+  const findExportButton = (wrapper) =>
+    wrapper.findAll('button').find((b) => b.text().includes('导出分区汇总'))
+
+  const zoneSummaryDisposition = (encodedName) =>
+    `attachment; filename="stock-gap-zone-summary-20260912.csv"; filename*=UTF-8''${encodedName}`
+
+  it('正常导出：使用后端中文文件名下载并提示成功', async () => {
+    const wrapper = await mountPage()
+    exportStockGapZoneSummary.mockResolvedValue({
+      headers: { 'content-disposition': zoneSummaryDisposition(encodeURIComponent('库存缺口分区汇总_20260912.csv')) },
+      data: new Blob(['csv内容'], { type: 'text/csv' })
+    })
+
+    await findExportButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(exportStockGapZoneSummary).toHaveBeenCalledTimes(1)
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+    expect(capturedDownload).toBe('库存缺口分区汇总_20260912.csv')
+    expect(ElMessage.success).toHaveBeenCalledWith('导出成功')
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-url')
+
+    wrapper.unmount()
+  })
+
+  it('响应未携带文件名时使用中文兜底文件名', async () => {
+    const wrapper = await mountPage()
+    exportStockGapZoneSummary.mockResolvedValue({
+      headers: {},
+      data: new Blob(['csv'], { type: 'text/csv' })
+    })
+
+    await findExportButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(capturedDownload).toMatch(/^库存缺口分区汇总_\d{8}\.csv$/)
+
+    wrapper.unmount()
+  })
+
+  it('分区汇总为空时不发起导出并提示', async () => {
+    getStockGaps.mockResolvedValue([])
+    getStockGapZoneSummary.mockResolvedValue([])
+    getWiringPlanPage.mockResolvedValue({ records: [], total: 0 })
+    const wrapper = mount(StockGapList, {
+      global: { plugins: [ElementPlus], components: { ...Icons } }
+    })
+    await flushPromises()
+
+    await findExportButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(ElMessage.warning).toHaveBeenCalledWith('暂无分区汇总数据可导出')
+    expect(exportStockGapZoneSummary).not.toHaveBeenCalled()
+    expect(clickSpy).not.toHaveBeenCalled()
+    expect(ElMessage.success).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+  })
+
+  it('导出过程中重复点击被忽略，完成后按钮恢复可用', async () => {
+    const wrapper = await mountPage()
+    let resolveExport
+    exportStockGapZoneSummary.mockImplementation(
+      () => new Promise((resolve) => { resolveExport = resolve })
+    )
+
+    const button = findExportButton(wrapper)
+    await button.trigger('click')
+    await flushPromises()
+    expect(exportStockGapZoneSummary).toHaveBeenCalledTimes(1)
+    expect(button.classes()).toContain('is-loading')
+
+    // 请求未返回时连续点击（包括按钮 disabled 场景下的直接触发）：被忽略
+    await button.trigger('click')
+    await wrapper.vm.handleExportZoneSummary()
+    expect(exportStockGapZoneSummary).toHaveBeenCalledTimes(1)
+
+    resolveExport({
+      headers: { 'content-disposition': zoneSummaryDisposition(encodeURIComponent('库存缺口分区汇总_20260912.csv')) },
+      data: new Blob(['csv'], { type: 'text/csv' })
+    })
+    await flushPromises()
+
+    expect(ElMessage.success).toHaveBeenCalledWith('导出成功')
+    expect(button.classes()).not.toContain('is-loading')
+
+    // 完成后再次点击可以正常发起第二次导出
+    await button.trigger('click')
+    await flushPromises()
+    expect(exportStockGapZoneSummary).toHaveBeenCalledTimes(2)
+
+    wrapper.unmount()
+  })
+
+  it('导出失败：不触发下载、不提示成功、按钮恢复可用', async () => {
+    const wrapper = await mountPage()
+    exportStockGapZoneSummary.mockRejectedValue(new Error('网络错误'))
+
+    const button = findExportButton(wrapper)
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(clickSpy).not.toHaveBeenCalled()
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    expect(button.classes()).not.toContain('is-loading')
 
     wrapper.unmount()
   })

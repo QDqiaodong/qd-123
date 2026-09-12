@@ -11,6 +11,7 @@ import com.factory.security.mapper.WiringPlanDetailMapper;
 import com.factory.security.mapper.WiringPlanMapper;
 import com.factory.security.mapper.ZoneTagMapper;
 import com.factory.security.vo.StockGapVO;
+import com.factory.security.vo.StockGapZoneSummaryVO;
 import com.factory.security.vo.WiringPlanDetailVO;
 import com.factory.security.vo.WiringPlanExportRowVO;
 import com.factory.security.vo.WiringPlanVO;
@@ -609,6 +610,115 @@ class WiringPlanServiceImplTest {
         assertFalse(row.getShortage());
         assertEquals(0, row.getGapQuantity());
         verify(accessoryMapper).selectAllByIdsIncludingDeleted(any());
+    }
+
+    // -------------------- 库存缺口分区汇总 --------------------
+
+    /**
+     * 分区汇总与缺口列表同源：分区顺序一致（排序号升序、未分配分区最后），
+     * 缺口件数为分区内各配件缺口之和，涉及配件种数只统计现存量不足的配件
+     */
+    @Test
+    void zoneSummaryGroupsByZoneWithUnassignedLast() {
+        WiringPlan enabledPlan = buildPlan(1L, "启用方案", null, 1, "2026-09-02T10:00:00");
+        when(baseMapper.selectList(any())).thenReturn(Collections.singletonList(enabledPlan));
+        when(stockWriteoffMapper.selectList(any())).thenReturn(Collections.emptyList());
+        when(wiringPlanDetailMapper.selectList(any())).thenReturn(Arrays.asList(
+                buildDetail(10L, 1L, 100L, 600),
+                buildDetail(11L, 1L, 101L, 30),
+                buildDetail(12L, 1L, 102L, 500)));
+        when(accessoryMapper.selectList(any())).thenReturn(Arrays.asList(
+                buildStockAccessory(100L, "RVV电源线", 2L, 500, 0),
+                buildStockAccessory(101L, "防爆摄像头", 5L, 20, 0),
+                buildStockAccessory(102L, "扎带", null, 400, 0),
+                buildStockAccessory(103L, "六类网线", 2L, 1000, 0)));
+        when(zoneTagMapper.selectBatchIds(any())).thenReturn(Arrays.asList(
+                buildZone(2L, "线缆布线区", 2),
+                buildZone(5L, "监控设备区", 5)));
+
+        List<StockGapZoneSummaryVO> summary = wiringPlanService.listStockGapZoneSummary();
+
+        assertEquals(3, summary.size());
+        // 线缆布线区：RVV电源线缺口 100；六类网线无需求不计入涉及种数
+        StockGapZoneSummaryVO cable = summary.get(0);
+        assertEquals(2L, cable.getZoneTagId());
+        assertEquals("线缆布线区", cable.getZoneTagName());
+        assertFalse(cable.getUnassignedZone());
+        assertEquals(1, cable.getShortageAccessoryCount());
+        assertEquals(100, cable.getGapQuantityTotal());
+
+        // 监控设备区：防爆摄像头缺口 10
+        StockGapZoneSummaryVO monitor = summary.get(1);
+        assertEquals("监控设备区", monitor.getZoneTagName());
+        assertEquals(1, monitor.getShortageAccessoryCount());
+        assertEquals(10, monitor.getGapQuantityTotal());
+
+        // 未分配分区单独一行且位于最后：扎带缺口 100
+        StockGapZoneSummaryVO unassigned = summary.get(2);
+        assertNull(unassigned.getZoneTagId());
+        assertEquals("未分配分区", unassigned.getZoneTagName());
+        assertTrue(unassigned.getUnassignedZone());
+        assertEquals(1, unassigned.getShortageAccessoryCount());
+        assertEquals(100, unassigned.getGapQuantityTotal());
+    }
+
+    @Test
+    void zoneSummaryTotalsMatchGapListRows() {
+        // 与缺口列表同一批数据：分区小计之和必须等于缺口列表逐行之和（页面合计、小计、导出一致）
+        WiringPlan enabledPlan = buildPlan(1L, "启用方案", null, 1, "2026-09-02T10:00:00");
+        when(baseMapper.selectList(any())).thenReturn(Collections.singletonList(enabledPlan));
+        when(stockWriteoffMapper.selectList(any())).thenReturn(Collections.emptyList());
+        when(wiringPlanDetailMapper.selectList(any())).thenReturn(Arrays.asList(
+                buildDetail(10L, 1L, 100L, 600),
+                buildDetail(11L, 1L, 101L, 30)));
+        when(accessoryMapper.selectList(any())).thenReturn(Arrays.asList(
+                buildStockAccessory(100L, "RVV电源线", 2L, 500, 0),
+                buildStockAccessory(101L, "防爆摄像头", 5L, 20, 0),
+                buildStockAccessory(102L, "扎带", null, 400, 0)));
+        when(zoneTagMapper.selectBatchIds(any())).thenReturn(Arrays.asList(
+                buildZone(2L, "线缆布线区", 2),
+                buildZone(5L, "监控设备区", 5)));
+
+        List<StockGapVO> gaps = wiringPlanService.listStockGaps();
+        List<StockGapZoneSummaryVO> summary = wiringPlanService.listStockGapZoneSummary();
+
+        int gapSum = gaps.stream().mapToInt(StockGapVO::getGapQuantity).sum();
+        long shortageCount = gaps.stream().filter(g -> Boolean.TRUE.equals(g.getShortage())).count();
+        assertEquals(gapSum, summary.stream().mapToInt(StockGapZoneSummaryVO::getGapQuantityTotal).sum());
+        assertEquals(shortageCount,
+                summary.stream().mapToInt(StockGapZoneSummaryVO::getShortageAccessoryCount).sum());
+    }
+
+    @Test
+    void zoneSummaryExcludesDeletedAccessoriesFromGapFigures() {
+        // 已删除配件仍归入未分配分区行，但不参与缺口件数与涉及配件种数
+        WiringPlan enabledPlan = buildPlan(1L, "启用方案", null, 1, "2026-09-02T10:00:00");
+        when(baseMapper.selectList(any())).thenReturn(Collections.singletonList(enabledPlan));
+        when(stockWriteoffMapper.selectList(any())).thenReturn(Collections.emptyList());
+        when(wiringPlanDetailMapper.selectList(any())).thenReturn(Collections.singletonList(
+                buildDetail(10L, 1L, 999L, 30)));
+        when(accessoryMapper.selectList(any())).thenReturn(Collections.emptyList());
+        when(accessoryMapper.selectAllByIdsIncludingDeleted(any())).thenReturn(Collections.singletonList(
+                buildStockAccessory(999L, "旧型号配件", null, 0, 1)));
+
+        List<StockGapZoneSummaryVO> summary = wiringPlanService.listStockGapZoneSummary();
+
+        assertEquals(1, summary.size());
+        StockGapZoneSummaryVO unassigned = summary.get(0);
+        assertTrue(unassigned.getUnassignedZone());
+        assertEquals("未分配分区", unassigned.getZoneTagName());
+        assertEquals(0, unassigned.getShortageAccessoryCount());
+        assertEquals(0, unassigned.getGapQuantityTotal());
+    }
+
+    @Test
+    void zoneSummaryEmptyWhenNoAccessories() {
+        when(baseMapper.selectList(any())).thenReturn(Collections.emptyList());
+        when(accessoryMapper.selectList(any())).thenReturn(Collections.emptyList());
+
+        List<StockGapZoneSummaryVO> summary = wiringPlanService.listStockGapZoneSummary();
+
+        assertTrue(summary.isEmpty());
     }
 
     // -------------------- 核销出库 --------------------

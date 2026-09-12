@@ -17,6 +17,7 @@ import com.factory.security.mapper.WiringPlanMapper;
 import com.factory.security.mapper.ZoneTagMapper;
 import com.factory.security.service.WiringPlanService;
 import com.factory.security.vo.StockGapVO;
+import com.factory.security.vo.StockGapZoneSummaryVO;
 import com.factory.security.vo.WiringPlanDetailVO;
 import com.factory.security.vo.WiringPlanExportRowVO;
 import com.factory.security.vo.WiringPlanVO;
@@ -43,6 +44,9 @@ import java.util.stream.Stream;
 
 @Service
 public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringPlan> implements WiringPlanService {
+
+    /** 分区汇总中“未分配分区”分组的归组键（zoneTagId 为 null 时的占位键） */
+    private static final String UNASSIGNED_ZONE_KEY = "__UNASSIGNED_ZONE__";
 
     @Autowired
     private WiringPlanDetailMapper wiringPlanDetailMapper;
@@ -309,6 +313,34 @@ public class WiringPlanServiceImpl extends ServiceImpl<WiringPlanMapper, WiringP
                 .thenComparing(row -> row.getAccessoryName() != null ? row.getAccessoryName() : "")
                 .thenComparing(StockGapVO::getAccessoryId, Comparator.nullsLast(Comparator.naturalOrder())));
         return rows;
+    }
+
+    @Override
+    public List<StockGapZoneSummaryVO> listStockGapZoneSummary() {
+        // 与缺口列表共用同一批数据归组：缺口列表已按“分区排序号升序、未分配分区最后”排序，
+        // 按出现顺序归组即得分区小计顺序，保证页面合计、分区小计与导出文件一致
+        List<StockGapVO> gaps = listStockGaps();
+        Map<String, StockGapZoneSummaryVO> summaryByZone = new LinkedHashMap<>();
+        for (StockGapVO gap : gaps) {
+            boolean unassigned = Boolean.TRUE.equals(gap.getUnassignedZone());
+            String key = unassigned ? UNASSIGNED_ZONE_KEY : String.valueOf(gap.getZoneTagId());
+            StockGapZoneSummaryVO summary = summaryByZone.computeIfAbsent(key, k -> {
+                StockGapZoneSummaryVO vo = new StockGapZoneSummaryVO();
+                vo.setZoneTagId(unassigned ? null : gap.getZoneTagId());
+                vo.setZoneTagName(unassigned ? "未分配分区" : gap.getZoneTagName());
+                vo.setUnassignedZone(unassigned);
+                vo.setShortageAccessoryCount(0);
+                vo.setGapQuantityTotal(0);
+                return vo;
+            });
+            // 只统计现存量不足的配件：已删除配件 shortage=false、缺口为 0，自然不参与合计
+            if (Boolean.TRUE.equals(gap.getShortage())) {
+                summary.setShortageAccessoryCount(summary.getShortageAccessoryCount() + 1);
+                summary.setGapQuantityTotal(summary.getGapQuantityTotal()
+                        + (gap.getGapQuantity() == null ? 0 : gap.getGapQuantity()));
+            }
+        }
+        return new ArrayList<>(summaryByZone.values());
     }
 
     @Override

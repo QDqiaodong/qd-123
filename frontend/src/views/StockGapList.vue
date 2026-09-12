@@ -20,6 +20,42 @@
       </div>
     </el-card>
 
+    <el-card class="zone-summary-card">
+      <div class="summary-header">
+        <div class="header-title">
+          <el-icon color="#409EFF"><Collection /></el-icon>
+          <span>按分区汇总（库房备料用：缺口件数与涉及配件种数）</span>
+        </div>
+        <el-button type="success" plain :loading="exporting" @click="handleExportZoneSummary">
+          <el-icon><Download /></el-icon>
+          导出分区汇总
+        </el-button>
+      </div>
+      <el-table
+        v-loading="loading"
+        :data="zoneSummary"
+        border
+        stripe
+        show-summary
+        :summary-method="zoneSummaryMethod"
+        :row-class-name="zoneSummaryRowClassName"
+        style="width: 100%"
+      >
+        <el-table-column label="分区名称" min-width="200">
+          <template #default="{ row }">
+            <el-tag v-if="row.unassignedZone" type="warning" effect="plain">未分配分区</el-tag>
+            <el-tag v-else type="primary" effect="light">{{ row.zoneTagName }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="shortageAccessoryCount" label="涉及配件种数" min-width="140" align="center" />
+        <el-table-column prop="gapQuantityTotal" label="缺口件数" min-width="140" align="center">
+          <template #default="{ row }">
+            <span :class="{ 'shortage-text': row.gapQuantityTotal > 0 }">{{ row.gapQuantityTotal }}</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <el-card class="table-card">
       <el-table
         v-loading="loading"
@@ -102,12 +138,22 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { Warning, Refresh } from '@element-plus/icons-vue'
-import { getStockGaps, getWiringPlanPage } from '@/api/wiringPlan'
+import { ElMessage } from 'element-plus'
+import { Warning, Refresh, Download, Collection } from '@element-plus/icons-vue'
+import {
+  getStockGaps,
+  getStockGapZoneSummary,
+  exportStockGapZoneSummary,
+  getWiringPlanPage
+} from '@/api/wiringPlan'
 import { onStockChanged } from '@/utils/stockSync'
+import { resolveExportFileName, triggerBrowserDownload } from '@/utils/csvDownload'
 
 const gaps = ref([])
+const zoneSummary = ref([])
 const loading = ref(false)
+// 导出进行中标记：请求未返回前重复点击直接忽略，避免重复下载
+const exporting = ref(false)
 const writtenOffPlanCount = ref(0)
 
 const shortageCount = computed(() => gaps.value.filter(item => item.shortage).length)
@@ -119,6 +165,22 @@ const rowClassName = ({ row }) => {
   if (row.accessoryDeleted) return 'deleted-row'
   if (row.shortage) return 'shortage-row'
   return ''
+}
+
+const zoneSummaryRowClassName = ({ row }) => (row.unassignedZone ? 'unassigned-zone-row' : '')
+
+// 合计行直接对当前分区小计行求和：页面合计与分区小计同源，刷新后两者一致
+const zoneSummaryMethod = ({ columns, data }) => {
+  return columns.map((column, index) => {
+    if (index === 0) return '合计'
+    if (column.property === 'shortageAccessoryCount') {
+      return String(data.reduce((sum, row) => sum + (row.shortageAccessoryCount || 0), 0))
+    }
+    if (column.property === 'gapQuantityTotal') {
+      return String(data.reduce((sum, row) => sum + (row.gapQuantityTotal || 0), 0))
+    }
+    return ''
+  })
 }
 
 const loadWrittenOffCount = async () => {
@@ -134,10 +196,45 @@ const loadWrittenOffCount = async () => {
 const loadGaps = async () => {
   loading.value = true
   try {
-    gaps.value = await getStockGaps()
+    // 缺口明细与分区汇总同源拉取，刷新后页面合计、分区小计与导出文件保持一致
+    const [gapRows, zoneRows] = await Promise.all([getStockGaps(), getStockGapZoneSummary()])
+    gaps.value = gapRows || []
+    zoneSummary.value = zoneRows || []
     await loadWrittenOffCount()
   } finally {
     loading.value = false
+  }
+}
+
+const buildZoneSummaryFallbackFileName = () => {
+  const date = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  const datePart = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
+  return `库存缺口分区汇总_${datePart}.csv`
+}
+
+const handleExportZoneSummary = async () => {
+  // 导出请求未完成前忽略重复点击
+  if (exporting.value) {
+    return
+  }
+  if (zoneSummary.value.length === 0) {
+    ElMessage.warning('暂无分区汇总数据可导出')
+    return
+  }
+  exporting.value = true
+  try {
+    const response = await exportStockGapZoneSummary()
+    const fileName = resolveExportFileName(
+      response.headers['content-disposition'],
+      buildZoneSummaryFallbackFileName()
+    )
+    triggerBrowserDownload(response.data, fileName)
+    ElMessage.success('导出成功')
+  } catch (e) {
+    // 错误提示已由请求拦截器统一展示
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -176,6 +273,7 @@ onBeforeUnmount(() => {
 }
 
 .summary-card,
+.zone-summary-card,
 .table-card {
   border-radius: 8px;
 }
@@ -220,6 +318,11 @@ onBeforeUnmount(() => {
 :deep(.deleted-row) {
   color: #909399;
   background-color: #f4f4f5;
+}
+
+/* 分区汇总中未分配分区单独一行，浅色底纹与“未分配分区”标签色调一致 */
+:deep(.unassigned-zone-row) {
+  background-color: #fdf6ec;
 }
 
 .unassigned-section {

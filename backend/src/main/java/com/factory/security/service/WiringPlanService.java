@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.factory.security.dto.WiringPlanDTO;
 import com.factory.security.entity.WiringPlan;
 import com.factory.security.vo.StockGapVO;
+import com.factory.security.vo.StockGapZoneSummaryVO;
 import com.factory.security.vo.WiringPlanExportRowVO;
 import com.factory.security.vo.WiringPlanVO;
 
@@ -37,6 +38,13 @@ public interface WiringPlanService extends IService<WiringPlan> {
      * 与方案明细、配件档案共用同一套库存数据，刷新后三处保持一致。
      */
     List<StockGapVO> listStockGaps();
+
+    /**
+     * 库存缺口按分区汇总：一个分区一行（缺口件数、涉及配件种数），未分配分区单独一行。
+     * 与缺口列表共用同一批数据归组，分区顺序与缺口列表一致（分区排序号升序、未分配分区最后），
+     * 页面合计、分区小计与导出文件取自同一口径，刷新后保持一致。
+     */
+    List<StockGapZoneSummaryVO> listStockGapZoneSummary();
 
     /**
      * 按方案核销出库：校验方案启用、未核销过、无已删除配件、现存量充足后，

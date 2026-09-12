@@ -65,6 +65,24 @@ export function getStockGaps() {
   })
 }
 
+// 库存缺口按分区汇总：缺口件数与涉及配件种数，未分配分区单独一行，与缺口列表同一口径
+export function getStockGapZoneSummary() {
+  return request({
+    url: '/wiring-plan/stock-gaps/zone-summary',
+    method: 'get'
+  })
+}
+
+// 导出缺口分区汇总 CSV：返回完整 axios response（响应体为 Blob）
+export function exportStockGapZoneSummary() {
+  return request({
+    url: '/wiring-plan/stock-gaps/zone-summary/export',
+    method: 'get',
+    responseType: 'blob',
+    timeout: 60000
+  })
+}
+
 // 按方案核销出库：扣减配件现存量，同一方案不可重复核销
 export function writeoffWiringPlan(id) {
   return request({
