@@ -1,7 +1,7 @@
 package com.factory.security.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.factory.security.dto.StockCheckConfirmDTO;
@@ -217,11 +217,11 @@ public class StockCheckServiceImpl extends ServiceImpl<StockCheckMapper, StockCh
             if (currentlyDeleted) {
                 // 已删除配件只展示：实盘值不落库；同时把明细删除标记补齐为 1，供列表/后续确认直接判断
                 if (!snapshotDeleted) {
-                    LambdaUpdateWrapper<StockCheckItem> markDeleted = new LambdaUpdateWrapper<>();
-                    markDeleted.eq(StockCheckItem::getId, item.getId())
-                            .eq(StockCheckItem::getCheckId, id)
-                            .set(StockCheckItem::getAccessoryDeleted, 1)
-                            .set(StockCheckItem::getActualQuantity, null);
+                    UpdateWrapper<StockCheckItem> markDeleted = new UpdateWrapper<>();
+                    markDeleted.eq("id", item.getId())
+                            .eq("check_id", id)
+                            .set("accessory_deleted", 1)
+                            .set("actual_quantity", null);
                     stockCheckItemMapper.update(null, markDeleted);
                 }
                 // 同步内存状态，避免随后 countDiff 把该配件计入差异
@@ -229,20 +229,20 @@ public class StockCheckServiceImpl extends ServiceImpl<StockCheckMapper, StockCh
                 item.setActualQuantity(null);
                 continue;
             }
-            LambdaUpdateWrapper<StockCheckItem> updateWrapper = new LambdaUpdateWrapper<>();
-            updateWrapper.eq(StockCheckItem::getId, item.getId())
-                    .eq(StockCheckItem::getCheckId, id)
-                    .set(StockCheckItem::getActualQuantity, actual.getActualQuantity());
+            UpdateWrapper<StockCheckItem> updateWrapper = new UpdateWrapper<>();
+            updateWrapper.eq("id", item.getId())
+                    .eq("check_id", id)
+                    .set("actual_quantity", actual.getActualQuantity());
             stockCheckItemMapper.update(null, updateWrapper);
             item.setActualQuantity(actual.getActualQuantity());
         }
 
         // 差异种数实时回写头表，列表页与详情页口径一致，刷新后不变
         int diffCount = countDiff(items, currentMap);
-        LambdaUpdateWrapper<StockCheck> headerUpdate = new LambdaUpdateWrapper<>();
-        headerUpdate.eq(StockCheck::getId, id)
-                .eq(StockCheck::getStatus, 0)
-                .set(StockCheck::getDiffCount, diffCount);
+        UpdateWrapper<StockCheck> headerUpdate = new UpdateWrapper<>();
+        headerUpdate.eq("id", id)
+                .eq("status", 0)
+                .set("diff_count", diffCount);
         baseMapper.update(null, headerUpdate);
     }
 
@@ -256,6 +256,17 @@ public class StockCheckServiceImpl extends ServiceImpl<StockCheckMapper, StockCh
         Map<Long, Accessory> currentMap = loadAccessoriesIncludingDeleted(
                 items.stream().map(StockCheckItem::getAccessoryId).collect(Collectors.toSet()));
 
+        // 先整体校验：任一未删除配件未登记实盘数则直接拒绝，此时不得改动任何配件库存，
+        // 保证“待确认不动档案、确认一次性回写”——库存回写只发生在全部校验通过之后
+        for (StockCheckItem item : items) {
+            boolean deleted = (item.getAccessoryDeleted() != null && item.getAccessoryDeleted() == 1)
+                    || isCurrentlyDeleted(currentMap.get(item.getAccessoryId()));
+            if (!deleted && item.getActualQuantity() == null) {
+                throw new RuntimeException(String.format(
+                        "配件「%s」尚未登记实盘数，请登记全部配件后再确认", item.getAccessoryName()));
+            }
+        }
+
         int diffCount = 0;
         for (StockCheckItem item : items) {
             boolean deleted = (item.getAccessoryDeleted() != null && item.getAccessoryDeleted() == 1)
@@ -263,10 +274,6 @@ public class StockCheckServiceImpl extends ServiceImpl<StockCheckMapper, StockCh
             if (deleted) {
                 // 已删除配件只展示，不回写库存
                 continue;
-            }
-            if (item.getActualQuantity() == null) {
-                throw new RuntimeException(String.format(
-                        "配件「%s」尚未登记实盘数，请登记全部配件后再确认", item.getAccessoryName()));
             }
             // 实盘数直接覆盖账面（盘盈盘亏都允许）；条件 deleted=0 防止回写到已删除配件。
             // 返回 0 行说明配件在本次加载后被并发删除，跳过且不计差异（不回写）
@@ -277,13 +284,13 @@ public class StockCheckServiceImpl extends ServiceImpl<StockCheckMapper, StockCh
         }
 
         // 条件置为已确认：并发确认时只有一个请求成功，失败方事务回滚全部库存回写
-        LambdaUpdateWrapper<StockCheck> confirmWrapper = new LambdaUpdateWrapper<>();
-        confirmWrapper.eq(StockCheck::getId, id)
-                .eq(StockCheck::getStatus, 0)
-                .set(StockCheck::getStatus, 1)
-                .set(StockCheck::getDiffCount, diffCount)
-                .set(StockCheck::getConfirmTime, LocalDateTime.now())
-                .set(StockCheck::getConfirmRemark, dto == null ? null : dto.getConfirmRemark());
+        UpdateWrapper<StockCheck> confirmWrapper = new UpdateWrapper<>();
+        confirmWrapper.eq("id", id)
+                .eq("status", 0)
+                .set("status", 1)
+                .set("diff_count", diffCount)
+                .set("confirm_time", LocalDateTime.now())
+                .set("confirm_remark", dto == null ? null : dto.getConfirmRemark());
         int affected = baseMapper.update(null, confirmWrapper);
         if (affected != 1) {
             throw new RuntimeException("该盘点单已确认，库存已回写，请勿重复确认");
