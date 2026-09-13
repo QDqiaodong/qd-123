@@ -61,3 +61,21 @@ CREATE TABLE IF NOT EXISTS `stock_check_item` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_check_accessory` (`check_id`, `accessory_id`)
 );
+
+CREATE TABLE IF NOT EXISTS `cable_reel` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `reel_no` varchar(60) NOT NULL,
+  `accessory_id` bigint NOT NULL,
+  `accessory_name` varchar(200) NOT NULL,
+  `model` varchar(200) NOT NULL,
+  `spec_unit` varchar(20) DEFAULT NULL,
+  `remaining_meters` int NOT NULL,
+  `status` tinyint NOT NULL DEFAULT 0,
+  `open_time` datetime DEFAULT NULL,
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `open_accessory_key` bigint GENERATED ALWAYS AS (CASE WHEN `status` = 1 THEN `accessory_id` ELSE NULL END),
+  PRIMARY KEY (`id`),
+  UNIQUE (`reel_no`),
+  UNIQUE (`open_accessory_key`)
+);

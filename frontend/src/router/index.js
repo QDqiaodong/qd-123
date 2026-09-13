@@ -40,6 +40,12 @@ const routes = [
     name: 'StockCheck',
     component: () => import('@/views/StockCheckList.vue'),
     meta: { title: '分区盘点' }
+  },
+  {
+    path: '/cable-reel',
+    name: 'CableReel',
+    component: () => import('@/views/CableReelList.vue'),
+    meta: { title: '整盘电源线建档' }
   }
 ]
 

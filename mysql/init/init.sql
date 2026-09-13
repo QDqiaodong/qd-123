@@ -276,6 +276,36 @@ CREATE TABLE IF NOT EXISTS `stock_check_item` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='分区盘点单明细表';
 
 -- ----------------------------
+-- 整盘电源线（线缆盘）档案表（幂等建表）
+-- 整盘电源线按盘号建档：盘号唯一、绑定一个配件（如 RVV 电源线）、登记盘上剩余米数。
+-- 建档即“未开盘”（status=0），此时只登记不动配件米数；只有“开盘确认”后（status=1）
+-- 才把整盘米数一次性落到配件档案现存量（米），之后才能从该盘扣米；未开过的盘一律不能扣米。
+-- 同一配件同时只允许一个已开盘：打开的盘正是该配件在档案里的米数来源，
+-- 靠生成列唯一索引 uk_open_accessory（仅 status=1 时取 accessory_id）兜底并发
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `cable_reel` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `reel_no` varchar(60) NOT NULL COMMENT '盘号（业务编号，唯一，同一盘号不能建两次）',
+  `accessory_id` bigint NOT NULL COMMENT '绑定的配件ID（按米计的线缆配件）',
+  `accessory_name` varchar(200) NOT NULL COMMENT '配件名称（建档时快照）',
+  `model` varchar(200) NOT NULL COMMENT '型号（建档时快照）',
+  `spec_unit` varchar(20) DEFAULT NULL COMMENT '规格单位（建档时快照，通常为 m）',
+  `remaining_meters` int NOT NULL COMMENT '盘上剩余米数（非负整数，建档即整盘米数）',
+  `status` tinyint NOT NULL DEFAULT 0 COMMENT '状态：0-未开盘（仅建档，不能扣米），1-已开盘（已确认，可扣米）',
+  `open_time` datetime DEFAULT NULL COMMENT '开盘确认时间',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  -- 生成列：仅已开盘取配件ID，未开盘恒为 NULL；配合唯一索引实现
+  -- “同一配件同时只允许一个已开盘”，MySQL 唯一索引允许多个 NULL，故未开盘盘不限数量
+  `open_accessory_key` bigint GENERATED ALWAYS AS (IF(`status` = 1, `accessory_id`, NULL)) VIRTUAL COMMENT '已开盘配件唯一键（生成列）',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_reel_no` (`reel_no`),
+  UNIQUE KEY `uk_open_accessory` (`open_accessory_key`),
+  KEY `idx_status` (`status`),
+  KEY `idx_accessory_id` (`accessory_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='整盘电源线（线缆盘）档案表';
+
+-- ----------------------------
 -- 初始化布线方案数据（幂等插入，按唯一键 plan_name 去重）
 -- ----------------------------
 INSERT IGNORE INTO `wiring_plan` (`id`, `plan_name`, `scene`, `description`, `status`) VALUES

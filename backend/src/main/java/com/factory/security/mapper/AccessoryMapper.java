@@ -21,6 +21,14 @@ public interface AccessoryMapper extends BaseMapper<Accessory> {
     int deductStock(@Param("id") Long id, @Param("quantity") Integer quantity);
 
     /**
+     * 线缆盘开盘确认入账：把整盘米数一次性加到绑定配件的现存量（米）。
+     * 仅对未删除配件生效；已删除配件影响行数为 0，由调用方据此拒绝开盘
+     */
+    @Update("UPDATE accessory SET stock_quantity = stock_quantity + #{quantity}, update_time = NOW() "
+            + "WHERE id = #{id} AND deleted = 0")
+    int addStock(@Param("id") Long id, @Param("quantity") Integer quantity);
+
+    /**
      * 显式更新可空列“安全库存下限”。
      * MyBatis-Plus 默认 updateById 字段策略为 NOT_NULL，会把 null 字段直接忽略，
      * 导致编辑配件时“清空下限（置为 NULL）”无法落库，故更新后按 DTO 值显式同步一次，
