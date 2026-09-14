@@ -44,13 +44,15 @@ public class StockCheckController {
             @RequestParam(defaultValue = "10") Integer pageSize,
             @RequestParam(required = false) Integer status,
             @RequestParam(required = false) Long zoneTagId,
-            @RequestParam(required = false) Boolean unassigned) {
+            @RequestParam(required = false) Boolean unassigned,
+            @RequestParam(required = false) Boolean hasRemark) {
         // unassigned=true 表示只看“未分配分区”的盘点单（zoneTagId IS NULL），
-        // 与按具体分区筛选互斥；前端用占位值 0 表示未分配分区
+        // 与按具体分区筛选互斥；前端用占位值 0 表示未分配分区。
+        // hasRemark 只在已确认单中筛“有无差异说明”：true=有说明，false=无说明
         Long effectiveZoneTagId = Boolean.TRUE.equals(unassigned) ? null : zoneTagId;
         return Result.success(
                 stockCheckService.page(pageNum, pageSize, status, effectiveZoneTagId,
-                        Boolean.TRUE.equals(unassigned)));
+                        Boolean.TRUE.equals(unassigned), hasRemark));
     }
 
     @GetMapping("/{id}")
@@ -125,7 +127,7 @@ public class StockCheckController {
         return Result.success();
     }
 
-    /** 确认盘点：一次性回写现存量并锁单，已删除配件只展示不回写 */
+    /** 确认盘点：差异说明必填，确认后在同一事务一次性回写现存量并锁单，已删除配件只展示不回写 */
     @PutMapping("/{id}/confirm")
     public Result<Void> confirm(@PathVariable Long id,
                                 @Valid @RequestBody(required = false) StockCheckConfirmDTO dto) {

@@ -1,6 +1,6 @@
 import request from '@/utils/request'
 
-// 分区盘点单分页：可按状态（0待确认/1已确认）、分区筛选
+// 分区盘点单分页：可按状态（0待确认/1已确认）、分区、有无差异说明（hasRemark，仅已确认单）筛选
 export function getStockCheckPage(params) {
   return request({
     url: '/stock-check/page',
@@ -35,7 +35,7 @@ export function recordStockCheckItems(id, items) {
   })
 }
 
-// 确认盘点：按实盘数一次性回写现存量并锁单，已删除配件不回写
+// 确认盘点：差异说明（confirmRemark）必填；确认后按实盘数一次性回写现存量并锁单，已删除配件不回写
 export function confirmStockCheck(id, confirmRemark) {
   return request({
     url: `/stock-check/${id}/confirm`,

@@ -90,7 +90,7 @@ class StockCheckControllerTest {
     void pageReturnsChecks() throws Exception {
         Page<StockCheckVO> page = new Page<>(1, 10, 1);
         page.setRecords(List.of(pendingVO()));
-        when(stockCheckService.page(eq(1), eq(10), eq(0), eq(2L), eq(false))).thenReturn(page);
+        when(stockCheckService.page(eq(1), eq(10), eq(0), eq(2L), eq(false), eq(null))).thenReturn(page);
 
         mockMvc.perform(get("/stock-check/page").param("status", "0").param("zoneTagId", "2"))
                 .andExpect(status().isOk())
@@ -98,20 +98,36 @@ class StockCheckControllerTest {
                 .andExpect(jsonPath("$.data.records[0].checkNo").value("PD20260912100000001"))
                 .andExpect(jsonPath("$.data.records[0].statusText").value("待确认"));
 
-        verify(stockCheckService).page(1, 10, 0, 2L, false);
+        verify(stockCheckService).page(1, 10, 0, 2L, false, null);
     }
 
     @Test
     void pageWithUnassignedFlagQueriesNullZone() throws Exception {
         Page<StockCheckVO> page = new Page<>(1, 10, 0);
         page.setRecords(Collections.emptyList());
-        when(stockCheckService.page(eq(1), eq(10), eq(null), eq(null), eq(true))).thenReturn(page);
+        when(stockCheckService.page(eq(1), eq(10), eq(null), eq(null), eq(true), eq(null))).thenReturn(page);
 
         mockMvc.perform(get("/stock-check/page").param("unassigned", "true"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200));
 
-        verify(stockCheckService).page(1, 10, null, null, true);
+        verify(stockCheckService).page(1, 10, null, null, true, null);
+    }
+
+    @Test
+    void pageWithHasRemarkFlagPassesItThrough() throws Exception {
+        Page<StockCheckVO> page = new Page<>(1, 10, 0);
+        page.setRecords(Collections.emptyList());
+        when(stockCheckService.page(eq(1), eq(10), eq(1), eq(null), eq(false), eq(true))).thenReturn(page);
+
+        // 按“已确认且有差异说明”筛选
+        mockMvc.perform(get("/stock-check/page")
+                        .param("status", "1")
+                        .param("hasRemark", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        verify(stockCheckService).page(1, 10, 1, null, false, true);
     }
 
     @Test
@@ -189,10 +205,28 @@ class StockCheckControllerTest {
     }
 
     @Test
-    void confirmWithoutBodyAlsoWorks() throws Exception {
+    void confirmWithoutBodyRejectedByRequiredRemark() throws Exception {
+        // 差异说明必填：不带 body 时服务层兜底拒绝（模拟真实服务抛错），返回业务错误且不回写
+        doThrow(new RuntimeException("请填写差异说明后再确认盘点回写"))
+                .when(stockCheckService).confirm(eq(10L), any());
+
         mockMvc.perform(put("/stock-check/10/confirm"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(200));
+                .andExpect(jsonPath("$.code").value(500))
+                .andExpect(jsonPath("$.message").value("请填写差异说明后再确认盘点回写"));
+    }
+
+    @Test
+    void confirmWithBlankRemarkRejected() throws Exception {
+        // 纯空白说明同样不能确认，返回 400 与明确提示
+        mockMvc.perform(put("/stock-check/10/confirm")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"confirmRemark\":\"   \"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("请填写差异说明后再确认盘点回写"));
+
+        org.mockito.Mockito.verifyNoInteractions(stockCheckService);
     }
 
     @Test

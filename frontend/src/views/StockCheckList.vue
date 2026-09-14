@@ -25,10 +25,22 @@
             placeholder="全部状态"
             clearable
             style="width: 160px"
-            @change="handleSearch"
+            @change="handleStatusChange"
           >
             <el-option label="待确认" :value="0" />
             <el-option label="已确认" :value="1" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="差异说明">
+          <el-select
+            v-model="searchForm.hasRemark"
+            placeholder="全部"
+            clearable
+            style="width: 150px"
+            @change="handleRemarkFilterChange"
+          >
+            <el-option label="有说明" :value="true" />
+            <el-option label="无说明" :value="false" />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -90,6 +102,13 @@
         <el-table-column prop="confirmTime" label="确认时间" min-width="170" align="center">
           <template #default="{ row }">{{ row.confirmTime || '-' }}</template>
         </el-table-column>
+        <el-table-column label="差异说明" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.confirmRemark" class="remark-text">{{ row.confirmRemark }}</span>
+            <span v-else-if="row.status === 1" class="remark-empty">未填写</span>
+            <span v-else class="remark-pending">待确认后填写</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="200" fixed="right" align="center">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row.id)">
@@ -140,6 +159,41 @@
       <template #footer>
         <el-button @click="createDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="creating" @click="handleCreate">开盘</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 盘点确认对话框：必须填写差异说明才能确认，确认后在同一事务内一次性回写库存并锁单 -->
+    <el-dialog v-model="confirmDialogVisible" title="确认盘点回写" width="520px">
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        class="confirm-alert"
+        :title="confirmSummary"
+      />
+      <el-form label-width="92px" class="confirm-form">
+        <el-form-item label="差异说明" required>
+          <el-input
+            v-model="confirmRemark"
+            type="textarea"
+            :rows="4"
+            maxlength="500"
+            show-word-limit
+            placeholder="请填写本次盘点的差异说明（如盘盈盘亏原因、账实一致情况等），不填无法确认"
+          />
+          <div class="form-hint">差异说明会随盘点单保存，刷新后仍可查看，并支持在列表中按有无说明筛选</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="confirmDialogVisible = false">取消</el-button>
+        <el-button
+          type="success"
+          :loading="confirming"
+          :disabled="!confirmRemark.trim()"
+          @click="submitConfirm"
+        >
+          确认并回写库存
+        </el-button>
       </template>
     </el-dialog>
 
@@ -222,7 +276,7 @@
 
         <div v-if="editable" class="detail-footer">
           <div class="footer-hint">
-            实盘数登记后不会立即改动库存；全部登记完成并确认后，才按实盘数一次性回写档案现存量，单据锁定不可再改。
+            实盘数登记后不会立即改动库存；全部登记完成并填写差异说明确认后，才按实盘数一次性回写档案现存量，单据锁定不可再改。
           </div>
           <div>
             <el-button :loading="saving" @click="handleSaveDraft">保存登记</el-button>
@@ -237,10 +291,10 @@
           </div>
         </div>
         <div v-else class="detail-footer readonly-footer">
-          <el-text v-if="detail.header.confirmRemark" type="info">
-            确认备注：{{ detail.header.confirmRemark }}
+          <el-text v-if="detail.header.confirmRemark" type="info" class="readonly-remark">
+            差异说明：{{ detail.header.confirmRemark }}
           </el-text>
-          <span v-else></span>
+          <el-text v-else type="info" class="readonly-remark">差异说明：未填写</el-text>
           <el-button type="success" plain :loading="exporting" @click="handleExportDiff">
             <el-icon><Download /></el-icon>
             导出差异明细
@@ -278,7 +332,9 @@ const loading = ref(false)
 
 const searchForm = reactive({
   zoneTagId: null,
-  status: null
+  status: null,
+  // 差异说明筛选：true=已确认且有说明，false=已确认但无说明（历史/异常数据），null=不筛
+  hasRemark: null
 })
 
 const pagination = reactive({
@@ -296,6 +352,9 @@ const detail = ref(null)
 const detailLoading = ref(false)
 const saving = ref(false)
 const confirming = ref(false)
+// 确认弹窗与差异说明：确认回写前必填，纯空白不能点确认
+const confirmDialogVisible = ref(false)
+const confirmRemark = ref('')
 // 导出进行中标记：请求未返回前重复点击直接忽略，避免重复下载
 const exporting = ref(false)
 // 抽屉内实盘录入值（itemId -> 数量），未登记为 null
@@ -315,6 +374,12 @@ const unrecordedCount = computed(() =>
   countableItems.value.filter(item => actualMap[item.id] == null).length
 )
 const hasDirty = computed(() => dirty.value)
+
+// 确认弹窗中的回写口径提示，与接口回写规则保持同源展示
+const confirmSummary = computed(() => {
+  if (!detail.value) return ''
+  return `确认后将按实盘数一次性回写档案现存量（盘盈 ${detail.value.gainCount} 种、盘亏 ${detail.value.lossCount} 种，差异合计 ${formatSigned(detail.value.totalDiffQuantity)} 件），本盘点单将锁定不可再修改。`
+})
 
 const markDirty = () => {
   dirty.value = true
@@ -352,6 +417,10 @@ const loadData = async () => {
       pageSize: pagination.pageSize,
       status: searchForm.status
     }
+    // 差异说明筛选仅对已确认单有意义；已选定后后端强制按已确认单过滤
+    if (searchForm.hasRemark != null) {
+      params.hasRemark = searchForm.hasRemark
+    }
     // 占位值 0 表示“未分配分区”，后端按 null 查询；普通选择传真实分区ID
     if (searchForm.zoneTagId === UNASSIGNED_FILTER_VALUE) {
       params.unassigned = true
@@ -381,9 +450,26 @@ const handleSearch = () => {
   loadData()
 }
 
+// “有无差异说明”只针对已确认单：选择该筛选时把状态同步为已确认，
+// 避免界面选了“待确认”却由后端强制按已确认查询造成口径困惑
+const handleRemarkFilterChange = () => {
+  if (searchForm.hasRemark != null) {
+    searchForm.status = 1
+  }
+  handleSearch()
+}
+
+// 切回“待确认/全部状态”时差异说明筛选不再适用，自动清掉（以 change 回传值为准）
+const handleStatusChange = (value) => {
+  if (value !== 1 && searchForm.hasRemark != null) {
+    searchForm.hasRemark = null
+  }
+  handleSearch()
+}
 const handleReset = () => {
   searchForm.zoneTagId = null
   searchForm.status = null
+  searchForm.hasRemark = null
   pagination.pageNum = 1
   loadData()
 }
@@ -481,34 +567,31 @@ const handleConfirm = () => {
     ElMessage.warning('实盘数有未保存的修改，请先点击“保存登记”后再确认')
     return
   }
-  const gain = detail.value.gainCount
-  const loss = detail.value.lossCount
-  const total = detail.value.totalDiffQuantity
-  ElMessageBox.confirm(
-    `确认后将按实盘数一次性回写档案现存量（盘盈 ${gain} 种、盘亏 ${loss} 种，差异合计 ${formatSigned(total)} 件），`
-      + '本盘点单将锁定不可再修改。确认继续吗？',
-    '确认盘点回写',
-    {
-      confirmButtonText: '确认并回写',
-      cancelButtonText: '取消',
-      type: 'warning'
-    }
-  )
-    .then(async () => {
-      confirming.value = true
-      try {
-        await confirmStockCheck(detail.value.header.id, null)
-        ElMessage.success('盘点已确认，档案现存量已一次性回写')
-        await loadDetail(detail.value.header.id)
-        loadData()
-        // 档案现存量已变化：通知配件档案、方案列表与缺口页按最新库存刷新，
-        // 保证刷新后档案现存量与最近一次已确认盘点一致
-        notifyStockChanged('stock-check')
-      } finally {
-        confirming.value = false
-      }
-    })
-    .catch(() => {})
+  // 差异说明必填：弹窗内说明为纯空白时确认按钮禁用；确认后才按实盘数一次性回写
+  confirmRemark.value = ''
+  confirmDialogVisible.value = true
+}
+
+const submitConfirm = async () => {
+  if (!detail.value) return
+  const remark = confirmRemark.value.trim()
+  if (!remark) {
+    ElMessage.warning('请填写差异说明后再确认盘点回写')
+    return
+  }
+  confirming.value = true
+  try {
+    await confirmStockCheck(detail.value.header.id, remark)
+    ElMessage.success('盘点已确认，档案现存量已一次性回写')
+    confirmDialogVisible.value = false
+    await loadDetail(detail.value.header.id)
+    loadData()
+    // 档案现存量已变化：通知配件档案、方案列表与缺口页按最新库存刷新，
+    // 保证刷新后档案现存量与最近一次已确认盘点一致
+    notifyStockChanged('stock-check')
+  } finally {
+    confirming.value = false
+  }
 }
 
 const handleDelete = (row) => {
@@ -611,6 +694,29 @@ onBeforeUnmount(() => {
 .diff-text {
   color: #f56c6c;
   font-weight: 700;
+}
+
+.remark-text {
+  color: #303133;
+}
+
+.remark-empty,
+.remark-pending {
+  color: #909399;
+}
+
+.confirm-alert {
+  margin-bottom: 16px;
+}
+
+.confirm-form {
+  margin-top: 4px;
+}
+
+.readonly-remark {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
 }
 
 .pagination-container {

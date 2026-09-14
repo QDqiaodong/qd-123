@@ -110,6 +110,13 @@ class StockCheckServiceImplTest {
         return dto;
     }
 
+    /** 合法确认参数：差异说明必填，成功路径统一使用 */
+    private StockCheckConfirmDTO confirmDTO() {
+        StockCheckConfirmDTO dto = new StockCheckConfirmDTO();
+        dto.setConfirmRemark("月度分区盘点，差异已逐笔核对");
+        return dto;
+    }
+
     @Test
     void createForNormalZoneSnapshotsAccessories() {
         ZoneTag zone = new ZoneTag();
@@ -294,7 +301,7 @@ class StockCheckServiceImplTest {
         when(accessoryMapper.resetStock(anyLong(), anyInt())).thenReturn(1);
         when(baseMapper.update(any(), any())).thenReturn(1);
 
-        stockCheckService.confirm(10L, new StockCheckConfirmDTO());
+        stockCheckService.confirm(10L, confirmDTO());
 
         // 按实盘数一次性回写两条配件库存（盘亏 980、盘盈 650）
         verify(accessoryMapper).resetStock(3L, 980);
@@ -313,7 +320,7 @@ class StockCheckServiceImplTest {
         when(accessoryMapper.resetStock(anyLong(), anyInt())).thenReturn(1);
         when(baseMapper.update(any(), any())).thenReturn(1);
 
-        stockCheckService.confirm(10L, new StockCheckConfirmDTO());
+        stockCheckService.confirm(10L, confirmDTO());
 
         // 已删除配件只展示不回写：只回写扎带 1 条
         verify(accessoryMapper).resetStock(9L, 400);
@@ -330,7 +337,7 @@ class StockCheckServiceImplTest {
                 .thenReturn(Arrays.asList(accessory(3L, "超五类网线", 1000, 0), accessory(4L, "六类网线", 600, 0)));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> stockCheckService.confirm(10L, new StockCheckConfirmDTO()));
+                () -> stockCheckService.confirm(10L, confirmDTO()));
         assertTrue(ex.getMessage().contains("尚未登记实盘数"));
         verify(accessoryMapper, never()).resetStock(anyLong(), anyInt());
         verify(baseMapper, never()).update(any(), any());
@@ -347,7 +354,7 @@ class StockCheckServiceImplTest {
         when(accessoryMapper.resetStock(anyLong(), anyInt())).thenReturn(1);
         when(baseMapper.update(any(), any())).thenReturn(1);
 
-        stockCheckService.confirm(10L, new StockCheckConfirmDTO());
+        stockCheckService.confirm(10L, confirmDTO());
 
         verify(accessoryMapper).resetStock(9L, 400);
         verify(accessoryMapper, never()).resetStock(eq(99L), anyInt());
@@ -363,6 +370,31 @@ class StockCheckServiceImplTest {
                 () -> stockCheckService.confirm(10L, new StockCheckConfirmDTO()));
         assertTrue(ex.getMessage().contains("已确认"));
         verify(accessoryMapper, never()).resetStock(anyLong(), anyInt());
+    }
+
+    @Test
+    void confirmRejectsWhenRemarkMissingOrBlankAndStockUntouched() {
+        when(baseMapper.selectById(10L)).thenReturn(pendingCheck(10L, 2L, "线缆布线区"));
+
+        // 无 body（dto=null）、空串、纯空白三种都必须拒绝，且拒绝发生在加载明细/任何回写之前
+        assertBlankRejected(null);
+        StockCheckConfirmDTO empty = new StockCheckConfirmDTO();
+        empty.setConfirmRemark("");
+        assertBlankRejected(empty);
+        StockCheckConfirmDTO spaces = new StockCheckConfirmDTO();
+        spaces.setConfirmRemark("   \t ");
+        assertBlankRejected(spaces);
+
+        // 不动库存、不锁单、也不需要加载盘点明细
+        verify(stockCheckItemMapper, never()).selectList(any());
+        verify(accessoryMapper, never()).resetStock(anyLong(), anyInt());
+        verify(baseMapper, never()).update(any(), any());
+    }
+
+    private void assertBlankRejected(StockCheckConfirmDTO dto) {
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> stockCheckService.confirm(10L, dto));
+        assertTrue(ex.getMessage().contains("差异说明"));
     }
 
     @Test
@@ -431,7 +463,7 @@ class StockCheckServiceImplTest {
         when(accessoryMapper.resetStock(anyLong(), anyInt())).thenReturn(1);
         when(baseMapper.update(any(), any())).thenReturn(1);
 
-        stockCheckService.confirm(10L, new StockCheckConfirmDTO());
+        stockCheckService.confirm(10L, confirmDTO());
 
         verify(accessoryMapper).resetStock(3L, 1000);
         // 开盘后被删除的配件不回写

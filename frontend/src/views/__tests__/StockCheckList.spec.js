@@ -68,6 +68,7 @@ const pendingPage = () => ({
       itemCount: 3,
       recordedCount: 1,
       diffCount: 1,
+      confirmRemark: null,
       confirmTime: null,
       createTime: '2026-09-12 10:00:00'
     },
@@ -82,6 +83,7 @@ const pendingPage = () => ({
       itemCount: 0,
       recordedCount: 0,
       diffCount: 0,
+      confirmRemark: '空分区开盘核对无差异',
       confirmTime: '2026-09-12 09:30:00',
       createTime: '2026-09-12 09:00:00'
     }
@@ -228,6 +230,85 @@ describe('分区盘点 - 列表', () => {
     const wrapper = await mountPage()
     const confirmedRow = wrapper.findAll('.el-table__row')[1]
     expect(confirmedRow.text()).toContain('0 种 / 0 种')
+    wrapper.unmount()
+  })
+
+  it('列表差异说明列：已确认单展示说明内容，待确认单提示确认后填写', async () => {
+    const wrapper = await mountPage()
+    const rows = wrapper.findAll('.el-table__row')
+    expect(rows[1].text()).toContain('空分区开盘核对无差异')
+    expect(rows[0].text()).toContain('待确认后填写')
+    wrapper.unmount()
+  })
+})
+
+describe('分区盘点 - 差异说明筛选', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    __resetStockListenersForTests()
+    document.body.innerHTML = ''
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('选择“有说明”时自动锁定已确认状态并把 hasRemark=true 带给分页接口', async () => {
+    const wrapper = await mountPage()
+    getStockCheckPage.mockClear()
+    getStockCheckPage.mockResolvedValue({ records: [], total: 0 })
+
+    // 直接走组件方法：选择有说明
+    wrapper.vm.searchForm.hasRemark = true
+    wrapper.vm.handleRemarkFilterChange()
+    await flushPromises()
+
+    expect(wrapper.vm.searchForm.status).toBe(1)
+    expect(wrapper.vm.pagination.pageNum).toBe(1)
+    expect(getStockCheckPage).toHaveBeenCalledWith({
+      pageNum: 1,
+      pageSize: 10,
+      status: 1,
+      hasRemark: true
+    })
+    wrapper.unmount()
+  })
+
+  it('选择“无说明”时传 hasRemark=false，清空筛选后不再携带该参数', async () => {
+    const wrapper = await mountPage()
+    getStockCheckPage.mockClear()
+    getStockCheckPage.mockResolvedValue({ records: [], total: 0 })
+
+    wrapper.vm.searchForm.hasRemark = false
+    wrapper.vm.handleRemarkFilterChange()
+    await flushPromises()
+    expect(getStockCheckPage.mock.calls[0][0]).toMatchObject({ status: 1, hasRemark: false })
+
+    // 重置：三个筛选项清空，查询参数不带 hasRemark
+    getStockCheckPage.mockClear()
+    wrapper.vm.handleReset()
+    await flushPromises()
+    expect(wrapper.vm.searchForm.hasRemark).toBeNull()
+    expect(wrapper.vm.searchForm.status).toBeNull()
+    expect(getStockCheckPage.mock.calls[0][0]).not.toHaveProperty('hasRemark')
+    wrapper.unmount()
+  })
+
+  it('已选“有说明”后把状态切回待确认时，自动清除差异说明筛选', async () => {
+    const wrapper = await mountPage()
+    wrapper.vm.searchForm.hasRemark = true
+    wrapper.vm.searchForm.status = 1
+    getStockCheckPage.mockClear()
+    getStockCheckPage.mockResolvedValue({ records: [], total: 0 })
+
+    // 模拟下拉切换：v-model 先把状态改为 0，再触发 change(value=0)
+    wrapper.vm.searchForm.status = 0
+    wrapper.vm.handleStatusChange(0)
+    await flushPromises()
+
+    expect(wrapper.vm.searchForm.hasRemark).toBeNull()
+    expect(getStockCheckPage.mock.calls[0][0]).toMatchObject({ status: 0 })
+    expect(getStockCheckPage.mock.calls[0][0]).not.toHaveProperty('hasRemark')
     wrapper.unmount()
   })
 })
@@ -500,42 +581,84 @@ describe('分区盘点 - 确认回写与锁定', () => {
     return detail
   }
 
-  it('确认成功：调用确认接口、提示回写成功并广播库存变更', async () => {
+  it('确认成功：必须先填差异说明，确认时把说明带给接口、提示回写成功并广播库存变更', async () => {
     const wrapper = await mountPage()
     getStockCheckById.mockResolvedValue(fullyRecordedDetail())
     clickButtonByText(wrapper.element, '登记/查看')
     await waitTransition()
 
-    ElMessageBox.confirm.mockImplementation(() => Promise.resolve())
+    const drawer = document.body.querySelector('.el-drawer')
+    // 打开确认弹窗（此时 ElMessageBox 已不再使用）
+    clickButtonByText(drawer, '确认并回写')
+    await waitTransition()
+    const dialog = document.body.querySelector('.el-dialog')
+    expect(dialog).toBeTruthy()
+    expect(dialog.textContent).toContain('差异说明')
+
+    // 空说明：弹窗内确认按钮禁用，接口不调用
+    let dialogConfirmBtn = Array.from(dialog.querySelectorAll('button'))
+      .find(b => b.textContent.replace(/\s/g, '').includes('确认并回写库存'))
+    expect(dialogConfirmBtn.disabled).toBe(true)
+    expect(confirmStockCheck).not.toHaveBeenCalled()
+
+    // 填入说明后按钮可用
+    const textarea = dialog.querySelector('textarea')
+    expect(textarea).toBeTruthy()
+    textarea.value = '  月度盘点差异已逐笔核对  '
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    expect(dialogConfirmBtn.disabled).toBe(false)
+
     confirmStockCheck.mockResolvedValue(undefined)
     const confirmedDetail = fullyRecordedDetail()
-    confirmedDetail.header = { ...confirmedDetail.header, status: 1, statusText: '已确认' }
+    confirmedDetail.header = {
+      ...confirmedDetail.header,
+      status: 1,
+      statusText: '已确认',
+      confirmRemark: '月度盘点差异已逐笔核对'
+    }
     getStockCheckById.mockResolvedValue(confirmedDetail)
 
-    const confirmBtn = clickButtonByText(document.body.querySelector('.el-drawer'), '确认并回写')
-    expect(confirmBtn.disabled).toBe(false)
+    dialogConfirmBtn.click()
     await waitTransition()
     await waitTransition()
 
-    expect(confirmStockCheck).toHaveBeenCalledWith(10, null)
+    // 说明按 trim 后提交
+    expect(confirmStockCheck).toHaveBeenCalledWith(10, '月度盘点差异已逐笔核对')
     expect(ElMessage.success).toHaveBeenCalledWith('盘点已确认，档案现存量已一次性回写')
     // 确认后列表重拉（详情内提示也已变为已确认）
     expect(getStockCheckPage.mock.calls.length).toBeGreaterThanOrEqual(2)
+    // 已确认详情展示差异说明
+    const reopenedDrawer = document.body.querySelector('.el-drawer')
+    expect(reopenedDrawer.textContent).toContain('差异说明：月度盘点差异已逐笔核对')
 
     wrapper.unmount()
   })
 
-  it('取消确认框时不调用回写接口', async () => {
+  it('差异说明只填空白时确认按钮禁用；取消弹窗不调用回写接口', async () => {
     const wrapper = await mountPage()
     getStockCheckById.mockResolvedValue(fullyRecordedDetail())
     clickButtonByText(wrapper.element, '登记/查看')
     await waitTransition()
 
-    ElMessageBox.confirm.mockImplementation(() => Promise.reject(new Error('cancel')))
     clickButtonByText(document.body.querySelector('.el-drawer'), '确认并回写')
     await waitTransition()
+    const dialog = document.body.querySelector('.el-dialog')
+    const textarea = dialog.querySelector('textarea')
+    textarea.value = '   '
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
 
+    const dialogConfirmBtn = Array.from(dialog.querySelectorAll('button'))
+      .find(b => b.textContent.replace(/\s/g, '').includes('确认并回写库存'))
+    expect(dialogConfirmBtn.disabled).toBe(true)
+
+    // 取消：弹窗状态关闭、不回写（jsdom 下 teleport 旧容器的过渡样式不可靠，以组件状态为准）
+    clickButtonByText(dialog, '取消')
+    await waitTransition()
     expect(confirmStockCheck).not.toHaveBeenCalled()
+    expect(wrapper.vm.confirmDialogVisible).toBe(false)
+
     wrapper.unmount()
   })
 

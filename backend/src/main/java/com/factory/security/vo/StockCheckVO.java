@@ -35,6 +35,7 @@ public class StockCheckVO {
     /** 盘盈盘亏配件种数（已删除配件不参与） */
     private Integer diffCount;
 
+    /** 差异说明（确认时必填；列表可据此筛选有无说明） */
     private String confirmRemark;
 
     private LocalDateTime confirmTime;

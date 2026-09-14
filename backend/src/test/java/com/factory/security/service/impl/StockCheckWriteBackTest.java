@@ -11,6 +11,8 @@ import com.factory.security.mapper.StockCheckMapper;
 import com.factory.security.mapper.ZoneTagMapper;
 import com.factory.security.service.StockCheckService;
 import com.factory.security.vo.StockCheckDetailVO;
+import com.factory.security.vo.StockCheckVO;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,7 +22,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 盘点确认回写链路集成测试（H2 MySQL 兼容模式，真实 SQL 落库）：
@@ -107,8 +111,8 @@ class StockCheckWriteBackTest {
         assertEquals(1000, accessoryMapper.selectById(cat5eId).getStockQuantity());
         assertEquals(600, accessoryMapper.selectById(cat6Id).getStockQuantity());
 
-        // 确认成功：档案现存量立即按实盘数回写
-        stockCheckService.confirm(checkId, new StockCheckConfirmDTO());
+        // 确认成功：档案现存量立即按实盘数回写；差异说明随单据持久化，刷新后仍在
+        stockCheckService.confirm(checkId, confirmDTO("  月度盘点：差异已现场复核  "));
         assertEquals(980, accessoryMapper.selectById(cat5eId).getStockQuantity());
         assertEquals(650, accessoryMapper.selectById(cat6Id).getStockQuantity());
 
@@ -116,6 +120,34 @@ class StockCheckWriteBackTest {
         assertEquals(650, accessoryMapper.selectById(cat6Id).getStockQuantity());
         StockCheck confirmed = stockCheckMapper.selectById(checkId);
         assertEquals(1, confirmed.getStatus());
+        // 说明按 trim 后落库，重新查询仍是同一份
+        assertEquals("月度盘点：差异已现场复核", confirmed.getConfirmRemark());
+    }
+
+    @Test
+    void confirmWithoutRemarkRejectsAndKeepsArchiveUntouched() {
+        Long checkId = openCheck();
+        recordAll(checkId, 980, 650);
+
+        // 无说明（空 DTO）不能确认，库存保持账面数
+        assertThrows(RuntimeException.class,
+                () -> stockCheckService.confirm(checkId, new StockCheckConfirmDTO()));
+        assertEquals(1000, accessoryMapper.selectById(cat5eId).getStockQuantity());
+        assertEquals(600, accessoryMapper.selectById(cat6Id).getStockQuantity());
+
+        // 纯空白说明同样拒绝；补填说明后可正常确认回写
+        StockCheckConfirmDTO blank = new StockCheckConfirmDTO();
+        blank.setConfirmRemark("   ");
+        assertThrows(RuntimeException.class, () -> stockCheckService.confirm(checkId, blank));
+        stockCheckService.confirm(checkId, confirmDTO("账实差异已查明并处理"));
+        assertEquals(980, accessoryMapper.selectById(cat5eId).getStockQuantity());
+        assertEquals("账实差异已查明并处理", stockCheckMapper.selectById(checkId).getConfirmRemark());
+    }
+
+    private StockCheckConfirmDTO confirmDTO(String remark) {
+        StockCheckConfirmDTO dto = new StockCheckConfirmDTO();
+        dto.setConfirmRemark(remark);
+        return dto;
     }
 
     @Test
@@ -133,9 +165,50 @@ class StockCheckWriteBackTest {
         dto.setItems(List.of(actual));
         stockCheckService.recordItems(checkId, dto);
 
-        // 确认必须被拒绝，且已登记项的库存也不能被部分回写
-        assertThrows(RuntimeException.class, () -> stockCheckService.confirm(checkId, new StockCheckConfirmDTO()));
+        // 确认必须被拒绝，且已登记项的库存也不能被部分回写（说明已填，卡在未登记校验）
+        assertThrows(RuntimeException.class,
+                () -> stockCheckService.confirm(checkId, confirmDTO("差异说明已填写")));
         assertEquals(600, accessoryMapper.selectById(cat6Id).getStockQuantity());
         assertEquals(1000, accessoryMapper.selectById(cat5eId).getStockQuantity());
+    }
+
+    @Test
+    void pageFiltersConfirmedChecksByHasRemark() {
+        // 直接构造四张单：已确认有说明、已确认纯空白说明（视为无说明）、已确认无说明、待确认
+        insertCheck("PD-FILTER-1", 1, "月度盘点正常差异");
+        insertCheck("PD-FILTER-2", 1, "   ");
+        insertCheck("PD-FILTER-3", 1, null);
+        insertCheck("PD-FILTER-4", 0, null);
+
+        Page<StockCheckVO> withRemark = stockCheckService.page(1, 10, null, null, false, true);
+        List<String> withRemarkNos = withRemark.getRecords().stream()
+                .map(StockCheckVO::getCheckNo).collect(Collectors.toList());
+        assertEquals(1, withRemark.getTotal());
+        assertTrue(withRemarkNos.contains("PD-FILTER-1"));
+
+        // 无说明：纯空白与 NULL 都算，且只看已确认单（待确认单 PD-FILTER-4 不混入）
+        Page<StockCheckVO> withoutRemark = stockCheckService.page(1, 10, null, null, false, false);
+        List<String> withoutRemarkNos = withoutRemark.getRecords().stream()
+                .map(StockCheckVO::getCheckNo).collect(Collectors.toList());
+        assertEquals(2, withoutRemark.getTotal());
+        assertTrue(withoutRemarkNos.contains("PD-FILTER-2"));
+        assertTrue(withoutRemarkNos.contains("PD-FILTER-3"));
+        assertFalse(withoutRemarkNos.contains("PD-FILTER-4"));
+        // 返回行携带说明内容，刷新后仍可展示
+        assertEquals("月度盘点正常差异", withRemark.getRecords().get(0).getConfirmRemark());
+    }
+
+    /** 直接插入盘点单头：status=1 已确认 / 0 待确认，confirmRemark 模拟历史数据可能为 NULL 或纯空白 */
+    private void insertCheck(String checkNo, int status, String confirmRemark) {
+        StockCheck check = new StockCheck();
+        check.setCheckNo(checkNo);
+        check.setZoneTagId(zoneId);
+        check.setZoneName("线缆布线区");
+        check.setUnassignedZone(0);
+        check.setStatus(status);
+        check.setItemCount(0);
+        check.setDiffCount(0);
+        check.setConfirmRemark(confirmRemark);
+        stockCheckMapper.insert(check);
     }
 }

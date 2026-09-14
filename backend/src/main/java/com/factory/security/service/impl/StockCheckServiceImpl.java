@@ -55,7 +55,7 @@ public class StockCheckServiceImpl extends ServiceImpl<StockCheckMapper, StockCh
 
     @Override
     public Page<StockCheckVO> page(Integer pageNum, Integer pageSize, Integer status,
-                                   Long zoneTagId, boolean unassigned) {
+                                   Long zoneTagId, boolean unassigned, Boolean hasRemark) {
         Page<StockCheck> page = new Page<>(pageNum, pageSize);
         LambdaQueryWrapper<StockCheck> wrapper = new LambdaQueryWrapper<>();
         if (status != null) {
@@ -65,6 +65,16 @@ public class StockCheckServiceImpl extends ServiceImpl<StockCheckMapper, StockCh
             wrapper.isNull(StockCheck::getZoneTagId);
         } else if (zoneTagId != null) {
             wrapper.eq(StockCheck::getZoneTagId, zoneTagId);
+        }
+        if (hasRemark != null) {
+            // “有无差异说明”只对已确认单成立：待确认单尚未确认、天然没有说明，
+            // 故该筛选强制限定 status=1（会覆盖上面按状态传入的其它值），
+            // 用 SQL TRIM 判定，历史数据中的纯空白说明视为“无说明”
+            wrapper.eq(StockCheck::getStatus, 1);
+            wrapper.apply(Boolean.TRUE.equals(hasRemark),
+                    "confirm_remark IS NOT NULL AND TRIM(confirm_remark) <> ''");
+            wrapper.apply(Boolean.FALSE.equals(hasRemark),
+                    "confirm_remark IS NULL OR TRIM(confirm_remark) = ''");
         }
         wrapper.orderByDesc(StockCheck::getCreateTime);
         wrapper.orderByDesc(StockCheck::getId);
@@ -252,6 +262,14 @@ public class StockCheckServiceImpl extends ServiceImpl<StockCheckMapper, StockCh
         StockCheck check = getRequiredCheck(id);
         ensurePending(check);
 
+        // 差异说明必填：控制器 @NotBlank 已拦一层，服务层兜底（绕过 Web 层直接调用同样拒绝）。
+        // 纯空白也算未填写；此处拒绝时尚未改动任何库存，回写规则与原先保持一致
+        String confirmRemark = dto == null ? null : dto.getConfirmRemark();
+        if (confirmRemark == null || confirmRemark.trim().isEmpty()) {
+            throw new RuntimeException("请填写差异说明后再确认盘点回写");
+        }
+        confirmRemark = confirmRemark.trim();
+
         List<StockCheckItem> items = listItemsByCheckId(id);
         Map<Long, Accessory> currentMap = loadAccessoriesIncludingDeleted(
                 items.stream().map(StockCheckItem::getAccessoryId).collect(Collectors.toSet()));
@@ -290,7 +308,7 @@ public class StockCheckServiceImpl extends ServiceImpl<StockCheckMapper, StockCh
                 .set("status", 1)
                 .set("diff_count", diffCount)
                 .set("confirm_time", LocalDateTime.now())
-                .set("confirm_remark", dto == null ? null : dto.getConfirmRemark());
+                .set("confirm_remark", confirmRemark);
         int affected = baseMapper.update(null, confirmWrapper);
         if (affected != 1) {
             throw new RuntimeException("该盘点单已确认，库存已回写，请勿重复确认");

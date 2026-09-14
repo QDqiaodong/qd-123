@@ -13,10 +13,12 @@ public interface StockCheckService extends IService<StockCheck> {
 
     /**
      * 盘点单分页：可按状态、分区筛选，按创建时间倒序。
-     * unassigned=true 只看未分配分区盘点单（zoneTagId IS NULL），与 zoneTagId 互斥
+     * unassigned=true 只看未分配分区盘点单（zoneTagId IS NULL），与 zoneTagId 互斥。
+     * hasRemark 非空时只在已确认单（status=1）中按“是否填写差异说明”筛选：
+     * true=有说明，false=无说明；待确认单天然没有说明，不参与该筛选
      */
     Page<StockCheckVO> page(Integer pageNum, Integer pageSize, Integer status,
-                            Long zoneTagId, boolean unassigned);
+                            Long zoneTagId, boolean unassigned, Boolean hasRemark);
 
     /**
      * 按分区开盘：快照分区内全部配件（含已删除配件、空分区也允许开盘）。

@@ -251,7 +251,7 @@ CREATE TABLE IF NOT EXISTS `stock_check` (
   `status` tinyint NOT NULL DEFAULT 0 COMMENT '状态：0-待确认（可登记实盘数），1-已确认（库存已回写，单据只读）',
   `item_count` int NOT NULL DEFAULT 0 COMMENT '明细配件种数（含已删除配件）',
   `diff_count` int NOT NULL DEFAULT 0 COMMENT '盘盈盘亏配件种数（已删除配件不参与）',
-  `confirm_remark` varchar(500) DEFAULT NULL COMMENT '确认备注',
+  `confirm_remark` varchar(500) DEFAULT NULL COMMENT '差异说明（确认回写前必填）',
   `confirm_time` datetime DEFAULT NULL COMMENT '确认回写时间',
   `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',

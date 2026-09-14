@@ -108,7 +108,9 @@ class StockCheckMysqlReproIT {
             allFromReopened.add(dto);
         }
 
-        stockCheckService.confirm(checkId, new StockCheckConfirmDTO());
+        StockCheckConfirmDTO confirmDTO = new StockCheckConfirmDTO();
+        confirmDTO.setConfirmRemark("MySQL 真实链路盘点：差异逐笔核对确认");
+        stockCheckService.confirm(checkId, confirmDTO);
 
         StockCheck check = stockCheckMapper.selectById(checkId);
         System.out.println(">>> 盘点单状态 status=" + check.getStatus() + " diffCount=" + check.getDiffCount());
