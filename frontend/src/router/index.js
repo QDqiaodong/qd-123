@@ -52,6 +52,12 @@ const routes = [
     name: 'CableReel',
     component: () => import('@/views/CableReelList.vue'),
     meta: { title: '整盘电源线建档' }
+  },
+  {
+    path: '/fiber-splice',
+    name: 'FiberSplice',
+    component: () => import('@/views/FiberSpliceList.vue'),
+    meta: { title: '光纤熔接接头登记' }
   }
 ]
 

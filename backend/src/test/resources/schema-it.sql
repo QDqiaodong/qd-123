@@ -118,3 +118,23 @@ CREATE TABLE IF NOT EXISTS `cable_reel` (
   UNIQUE (`reel_no`),
   UNIQUE (`open_accessory_key`)
 );
+
+CREATE TABLE IF NOT EXISTS `fiber_splice_joint` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `splice_no` varchar(60) NOT NULL,
+  `zone_tag_id` bigint NOT NULL,
+  `zone_name` varchar(100) NOT NULL,
+  `reserve_meters` int NOT NULL,
+  `otdr_passed` tinyint NOT NULL DEFAULT 0,
+  `commissionable` tinyint NOT NULL DEFAULT 0,
+  `status` tinyint NOT NULL DEFAULT 0,
+  `void_reason` varchar(500) DEFAULT NULL,
+  `void_time` datetime DEFAULT NULL,
+  `remark` varchar(500) DEFAULT NULL,
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE (`splice_no`),
+  KEY (`zone_tag_id`),
+  KEY (`status`)
+);

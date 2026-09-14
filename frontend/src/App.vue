@@ -48,6 +48,10 @@
             <el-icon><Files /></el-icon>
             <span>整盘电源线建档</span>
           </el-menu-item>
+          <el-menu-item index="/fiber-splice">
+            <el-icon><Link /></el-icon>
+            <span>光纤熔接接头登记</span>
+          </el-menu-item>
         </el-menu>
       </el-aside>
       <el-main class="layout-main">
