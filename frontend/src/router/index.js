@@ -58,6 +58,12 @@ const routes = [
     name: 'FiberSplice',
     component: () => import('@/views/FiberSpliceList.vue'),
     meta: { title: '光纤熔接接头登记' }
+  },
+  {
+    path: '/inspection-order',
+    name: 'InspectionOrder',
+    component: () => import('@/views/InspectionOrderList.vue'),
+    meta: { title: '辅材送检单' }
   }
 ]
 

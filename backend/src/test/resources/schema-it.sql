@@ -138,3 +138,25 @@ CREATE TABLE IF NOT EXISTS `fiber_splice_joint` (
   KEY (`zone_tag_id`),
   KEY (`status`)
 );
+
+CREATE TABLE IF NOT EXISTS `inspection_order` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `inspection_no` varchar(40) NOT NULL,
+  `accessory_id` bigint NOT NULL,
+  `accessory_name` varchar(200) NOT NULL,
+  `model` varchar(200) NOT NULL,
+  `spec_unit` varchar(20) DEFAULT NULL,
+  `batch_no` varchar(100) NOT NULL,
+  `lab_name` varchar(200) NOT NULL,
+  `sample_returned` tinyint NOT NULL DEFAULT 0,
+  `qualified` tinyint NOT NULL DEFAULT 0,
+  `lab_conclusion` varchar(1000) DEFAULT NULL,
+  `sample_return_time` datetime DEFAULT NULL,
+  `qualified_time` datetime DEFAULT NULL,
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE (`inspection_no`),
+  KEY (`sample_returned`),
+  KEY (`qualified`)
+);

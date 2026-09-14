@@ -52,6 +52,10 @@
             <el-icon><Link /></el-icon>
             <span>光纤熔接接头登记</span>
           </el-menu-item>
+          <el-menu-item index="/inspection-order">
+            <el-icon><Stamp /></el-icon>
+            <span>辅材送检单</span>
+          </el-menu-item>
         </el-menu>
       </el-aside>
       <el-main class="layout-main">

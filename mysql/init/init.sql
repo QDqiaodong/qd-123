@@ -399,6 +399,37 @@ CREATE TABLE IF NOT EXISTS `fiber_splice_joint` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='光纤熔接接头登记表';
 
 -- ----------------------------
+-- 辅材送检单表（幂等建表）
+-- 仓管按已建档配件送检：送检时必须写明送检批次（batch_no）与实验室名称（lab_name），
+-- 两者在新建时非空，批次或实验室未填完整不能提交（后端 Bean Validation + Service 双层强制）。
+-- 新建即“待回样”（sample_returned=0）；实验室写回结论（lab_conclusion）后置 sample_returned=1，
+-- 未回样不能标合格：qualified=1 只允许在 sample_returned=1 后置位（服务层 + 条件更新双层强制），
+-- “合格 ⇒ 已回样”恒成立。送检单号全局唯一（uk_inspection_no）
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `inspection_order` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `inspection_no` varchar(40) NOT NULL COMMENT '送检单号（业务编号，全局唯一）',
+  `accessory_id` bigint NOT NULL COMMENT '送检配件ID（必须为已建档且未删除配件）',
+  `accessory_name` varchar(200) NOT NULL COMMENT '配件名称（新建时快照）',
+  `model` varchar(200) NOT NULL COMMENT '型号（新建时快照）',
+  `spec_unit` varchar(20) DEFAULT NULL COMMENT '规格单位（新建时快照）',
+  `batch_no` varchar(100) NOT NULL COMMENT '送检批次（必填，纯空格视为未填）',
+  `lab_name` varchar(200) NOT NULL COMMENT '实验室名称（必填，纯空格视为未填）',
+  `sample_returned` tinyint NOT NULL DEFAULT 0 COMMENT '是否已回样：0-待回样，1-已回样（实验室写回结论）',
+  `qualified` tinyint NOT NULL DEFAULT 0 COMMENT '是否合格：0-未判定，1-合格；仅已回样才允许置1',
+  `lab_conclusion` varchar(1000) DEFAULT NULL COMMENT '实验室回样结论（回样时写回，纯空白不允许回样）',
+  `sample_return_time` datetime DEFAULT NULL COMMENT '回样时间',
+  `qualified_time` datetime DEFAULT NULL COMMENT '判定合格时间',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_inspection_no` (`inspection_no`),
+  KEY `idx_sample_returned` (`sample_returned`),
+  KEY `idx_qualified` (`qualified`),
+  KEY `idx_accessory_id` (`accessory_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='辅材送检单表';
+
+-- ----------------------------
 -- 初始化布线方案数据（幂等插入，按唯一键 plan_name 去重）
 -- ----------------------------
 INSERT IGNORE INTO `wiring_plan` (`id`, `plan_name`, `scene`, `description`, `status`) VALUES
