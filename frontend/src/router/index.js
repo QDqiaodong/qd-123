@@ -42,6 +42,12 @@ const routes = [
     meta: { title: '分区盘点' }
   },
   {
+    path: '/replenish-order',
+    name: 'ReplenishOrder',
+    component: () => import('@/views/ReplenishOrderList.vue'),
+    meta: { title: '补货单' }
+  },
+  {
     path: '/cable-reel',
     name: 'CableReel',
     component: () => import('@/views/CableReelList.vue'),

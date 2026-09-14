@@ -135,7 +135,7 @@ describe('安全库存台账', () => {
     expect(section.text()).toContain('未分配低位件')
     expect(section.text()).toContain('未分配')
     const unassignedNames = section
-      .findAll('tbody tr td:first-child')
+      .findAll('tbody tr td:nth-child(2)')
       .map((el) => el.text().trim())
     expect(unassignedNames).toContain('未分配低位件')
 
@@ -368,7 +368,7 @@ describe('安全库存台账', () => {
     // 已分配表两行：缺口 90 的紧急桥架件必须排在缺口 40 的普通行之前
     const assignedNames = wrapper
       .findAll('.assigned-table tbody tr')
-      .map((tr) => tr.find('td:first-child').text().trim())
+      .map((tr) => tr.find("td:nth-child(2)").text().trim())
     expect(assignedNames).toEqual(['紧急桥架件', '普通桥架件'])
 
     const assignedTrs = wrapper.findAll('.assigned-table tbody tr')
@@ -434,7 +434,7 @@ describe('安全库存台账', () => {
     expect(getSafetyStockShortages).toHaveBeenCalledWith({ zoneTagId: 1 })
     const names = wrapper
       .findAll('.assigned-table tbody tr')
-      .map((tr) => tr.find('td:first-child').text().trim())
+      .map((tr) => tr.find("td:nth-child(2)").text().trim())
     expect(names).toEqual(['紧急桥架件', '新增普通桥架件'])
     const trs = wrapper.findAll('.assigned-table tbody tr')
     expect(trs[0].classes()).toContain('urgent-row')
@@ -451,7 +451,7 @@ describe('安全库存台账', () => {
     })
     await flushPromises()
     expect(
-      wrapper.findAll('.assigned-table tbody tr').map((tr) => tr.find('td:first-child').text().trim())
+      wrapper.findAll('.assigned-table tbody tr').map((tr) => tr.find("td:nth-child(2)").text().trim())
     ).toEqual(['紧急桥架件', '普通桥架件'])
 
     // 改下限/现存后后端重算：原普通件缺口变大转紧急并升到第一；原紧急件缺口降到不足一半转普通
@@ -487,7 +487,7 @@ describe('安全库存台账', () => {
     await flushPromises()
 
     const trs = wrapper.findAll('.assigned-table tbody tr')
-    expect(trs.map((tr) => tr.find('td:first-child').text().trim())).toEqual([
+    expect(trs.map((tr) => tr.find("td:nth-child(2)").text().trim())).toEqual([
       '普通桥架件',
       '紧急桥架件'
     ])

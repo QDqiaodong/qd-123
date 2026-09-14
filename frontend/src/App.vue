@@ -40,6 +40,10 @@
             <el-icon><DocumentChecked /></el-icon>
             <span>分区盘点</span>
           </el-menu-item>
+          <el-menu-item index="/replenish-order">
+            <el-icon><ShoppingCart /></el-icon>
+            <span>补货单</span>
+          </el-menu-item>
           <el-menu-item index="/cable-reel">
             <el-icon><Files /></el-icon>
             <span>整盘电源线建档</span>

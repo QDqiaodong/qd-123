@@ -86,6 +86,15 @@
             </span>
           </template>
         </el-table-column>
+        <el-table-column label="补货中（单号/待补）" min-width="190" align="center">
+          <template #default="{ row }">
+            <span v-if="row.replenishOrderId" class="replenish-pending">
+              <el-tag type="warning" size="small" effect="plain">{{ row.replenishOrderNo || '补货单' }}</el-tag>
+              <span class="replenish-qty">待补 {{ row.replenishPendingQuantity ?? 0 }}</span>
+            </span>
+            <span v-else class="safety-unset">-</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="createTime" label="创建时间" width="180" align="center" />
         <el-table-column label="操作" width="220" fixed="right" align="center">
           <template #default="{ row }">
@@ -519,6 +528,17 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.replenish-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.replenish-qty {
+  color: #e6a23c;
+  font-weight: 600;
 }
 
 .form-hint {

@@ -6,7 +6,9 @@
     <!-- 含已软删除配件：库存缺口列表据此保留展示被启用方案引用的已删除配件 -->
     <select id="selectAllByIdsIncludingDeleted" resultType="com.factory.security.entity.Accessory">
         SELECT id, accessory_name, model, material, scene, spec_min, spec_max, spec_unit,
-               zone_tag_id, stock_quantity, safety_stock, deleted, remark, create_time, update_time
+               zone_tag_id, stock_quantity, safety_stock,
+               replenish_order_id, replenish_order_no, replenish_pending_quantity,
+               deleted, remark, create_time, update_time
         FROM accessory
         WHERE id IN
         <foreach collection="ids" item="accessoryId" open="(" separator="," close=")">
@@ -17,7 +19,9 @@
     <!-- 分区盘点开盘：分区内全部配件（含已软删除）按配件名称排序，空分区返回空集合 -->
     <select id="selectByZoneIncludingDeleted" resultType="com.factory.security.entity.Accessory">
         SELECT id, accessory_name, model, material, scene, spec_min, spec_max, spec_unit,
-               zone_tag_id, stock_quantity, safety_stock, deleted, remark, create_time, update_time
+               zone_tag_id, stock_quantity, safety_stock,
+               replenish_order_id, replenish_order_no, replenish_pending_quantity,
+               deleted, remark, create_time, update_time
         FROM accessory
         <where>
             <choose>

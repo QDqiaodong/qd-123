@@ -22,11 +22,50 @@ CREATE TABLE IF NOT EXISTS `accessory` (
   `zone_tag_id` bigint DEFAULT NULL,
   `stock_quantity` int NOT NULL DEFAULT 0,
   `safety_stock` int DEFAULT NULL,
+  `replenish_order_id` bigint DEFAULT NULL,
+  `replenish_order_no` varchar(40) DEFAULT NULL,
+  `replenish_pending_quantity` int DEFAULT NULL,
   `deleted` tinyint NOT NULL DEFAULT 0,
   `remark` varchar(500) DEFAULT NULL,
   `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
   `update_time` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
+);
+
+CREATE TABLE IF NOT EXISTS `replenish_order` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `replenish_no` varchar(40) NOT NULL,
+  `status` tinyint NOT NULL DEFAULT 0,
+  `item_count` int NOT NULL DEFAULT 0,
+  `total_quantity` int NOT NULL DEFAULT 0,
+  `cancel_reason` varchar(500) DEFAULT NULL,
+  `submit_time` datetime DEFAULT NULL,
+  `cancel_time` datetime DEFAULT NULL,
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_replenish_no` (`replenish_no`)
+);
+
+CREATE TABLE IF NOT EXISTS `replenish_order_item` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `replenish_id` bigint NOT NULL,
+  `accessory_id` bigint NOT NULL,
+  `accessory_name` varchar(200) NOT NULL,
+  `model` varchar(200) NOT NULL,
+  `spec_unit` varchar(20) DEFAULT NULL,
+  `zone_tag_id` bigint DEFAULT NULL,
+  `zone_name` varchar(100) NOT NULL,
+  `unassigned_zone` tinyint NOT NULL DEFAULT 0,
+  `stock_quantity` int NOT NULL DEFAULT 0,
+  `safety_stock` int NOT NULL,
+  `gap_quantity` int NOT NULL,
+  `replenish_quantity` int NOT NULL,
+  `accessory_deleted` tinyint NOT NULL DEFAULT 0,
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_replenish_accessory` (`replenish_id`, `accessory_id`)
 );
 
 CREATE TABLE IF NOT EXISTS `stock_check` (

@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS `accessory` (
   `zone_tag_id` bigint DEFAULT NULL COMMENT '所属分区标签ID',
   `stock_quantity` int NOT NULL DEFAULT 0 COMMENT '现存量（库存数量）',
   `safety_stock` int DEFAULT NULL COMMENT '安全库存下限：NULL 表示未设下限，不进安全库存台账；非空且现存量低于该值即列入台账',
+  `replenish_order_id` bigint DEFAULT NULL COMMENT '待补补货单ID：非空表示已被一张已提交补货单占用；作废时清空',
+  `replenish_order_no` varchar(40) DEFAULT NULL COMMENT '待补补货单号（提交时快照，档案直接展示）',
+  `replenish_pending_quantity` int DEFAULT NULL COMMENT '待补数量（提交补货单时快照的补货数量），作废时清空',
   `deleted` tinyint NOT NULL DEFAULT 0 COMMENT '删除标记：0-正常，1-已删除（软删除，仍可在方案明细中展示但不可核销）',
   `remark` varchar(500) DEFAULT NULL COMMENT '备注',
   `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -71,6 +74,16 @@ BEGIN
                    AND COLUMN_NAME = 'deleted') THEN
     ALTER TABLE `accessory`
       ADD COLUMN `deleted` tinyint NOT NULL DEFAULT 0 COMMENT '删除标记：0-正常，1-已删除（软删除）' AFTER `safety_stock`;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = 'accessory'
+                   AND COLUMN_NAME = 'replenish_order_id') THEN
+    ALTER TABLE `accessory`
+      ADD COLUMN `replenish_order_id` bigint DEFAULT NULL COMMENT '待补补货单ID：非空表示已被一张已提交补货单占用' AFTER `safety_stock`,
+      ADD COLUMN `replenish_order_no` varchar(40) DEFAULT NULL COMMENT '待补补货单号（提交时快照）' AFTER `replenish_order_id`,
+      ADD COLUMN `replenish_pending_quantity` int DEFAULT NULL COMMENT '待补数量（提交补货单时快照）' AFTER `replenish_order_no`,
+      ADD KEY `idx_replenish_order_id` (`replenish_order_id`);
   END IF;
 END //
 DELIMITER ;
@@ -274,6 +287,57 @@ CREATE TABLE IF NOT EXISTS `stock_check_item` (
   UNIQUE KEY `uk_check_accessory` (`check_id`, `accessory_id`),
   KEY `idx_check_id` (`check_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='分区盘点单明细表';
+
+-- ----------------------------
+-- 补货单表（幂等建表）
+-- 仓管在安全库存台账勾选低于下限的配件生成：status=0 待提交草稿（可调整补货数量、可删除，
+-- 不占用配件待补标记）；status=1 已提交（档案回填补货单号与待补数量，数量锁定不可再改）；
+-- status=2 已作废（清除档案待补标记，单据只读留档）。单据按分区汇总缺口件数
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `replenish_order` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `replenish_no` varchar(40) NOT NULL COMMENT '补货单号（业务编号，快照展示）',
+  `status` tinyint NOT NULL DEFAULT 0 COMMENT '状态：0-待提交，1-已提交，2-已作废',
+  `item_count` int NOT NULL DEFAULT 0 COMMENT '明细配件种数',
+  `total_quantity` int NOT NULL DEFAULT 0 COMMENT '补货件数合计（随草稿调整实时回写）',
+  `cancel_reason` varchar(500) DEFAULT NULL COMMENT '作废原因',
+  `submit_time` datetime DEFAULT NULL COMMENT '提交时间',
+  `cancel_time` datetime DEFAULT NULL COMMENT '作废时间',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_replenish_no` (`replenish_no`),
+  KEY `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='补货单表';
+
+-- ----------------------------
+-- 补货单明细表（幂等建表）
+-- 生成时从台账带入勾选的低位配件，快照配件名称、型号、单位、分区与实时缺口，
+-- 补货数量默认等于缺口；草稿期间可调整（不得超过缺口），提交后锁定。
+-- 单据按分区汇总各明细补货数量；同一补货单内配件唯一
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `replenish_order_item` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `replenish_id` bigint NOT NULL COMMENT '补货单ID',
+  `accessory_id` bigint NOT NULL COMMENT '配件ID',
+  `accessory_name` varchar(200) NOT NULL COMMENT '配件名称（生成时快照）',
+  `model` varchar(200) NOT NULL COMMENT '型号（生成时快照）',
+  `spec_unit` varchar(20) DEFAULT NULL COMMENT '规格单位（生成时快照）',
+  `zone_tag_id` bigint DEFAULT NULL COMMENT '分区标签ID，NULL 表示未分配分区（生成时快照）',
+  `zone_name` varchar(100) NOT NULL COMMENT '分区名称（生成时快照，分区标签删除后仍可展示）',
+  `unassigned_zone` tinyint NOT NULL DEFAULT 0 COMMENT '是否未分配分区：0-否，1-是',
+  `stock_quantity` int NOT NULL DEFAULT 0 COMMENT '生成时现存量快照',
+  `safety_stock` int NOT NULL COMMENT '生成时安全库存下限快照',
+  `gap_quantity` int NOT NULL COMMENT '生成时缺口（下限-现存量），恒大于0',
+  `replenish_quantity` int NOT NULL COMMENT '补货数量：默认等于缺口，草稿可改，提交后锁定',
+  `accessory_deleted` tinyint NOT NULL DEFAULT 0 COMMENT '配件是否已删除：0-正常，1-已删除（随单展示，提交时拒绝）',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_replenish_accessory` (`replenish_id`, `accessory_id`),
+  KEY `idx_replenish_id` (`replenish_id`),
+  KEY `idx_zone_tag_id` (`zone_tag_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='补货单明细表';
 
 -- ----------------------------
 -- 整盘电源线（线缆盘）档案表（幂等建表）

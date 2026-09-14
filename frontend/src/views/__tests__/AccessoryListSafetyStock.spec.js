@@ -79,6 +79,7 @@ const mountPage = async () => {
     { id: 3, tagName: '接头终端区' }
   ])
   const wrapper = mount(AccessoryList, {
+    attachTo: document.body,
     global: {
       plugins: [ElementPlus],
       components: { ...Icons }
@@ -220,6 +221,37 @@ describe('配件档案 - 安全库存下限', () => {
 
     const payload = updateAccessory.mock.calls[0][0]
     expect(payload.safetyStock).toBeNull()
+
+    wrapper.unmount()
+  })
+
+  it('已提交补货单的配件展示补货单号与待补数量，无待补时显示占位', async () => {
+    const rows = accessoryRows().map((row) =>
+      row.id === 4
+        ? {
+            ...row,
+            replenishOrderId: 10,
+            replenishOrderNo: 'BH20260912100000001',
+            replenishPendingQuantity: 200
+          }
+        : row
+    )
+    // mountPage 内部会用基础数据覆盖 mock，这里挂载后再置为带待补标记的数据并等待重拉
+    const wrapper = await mountPage()
+    getAccessoryPage.mockResolvedValue({ records: rows, total: 3 })
+    await wrapper.vm.loadData()
+    await flushPromises()
+
+    const pendingRow = findRowByName(wrapper, '六类网线')
+    // 固定操作列会让行在 DOM 中出现两份，直接在表格范围内按标记类断言，避免取到克隆行
+    expect(wrapper.find('.replenish-pending').exists()).toBe(true)
+    expect(pendingRow.text()).toContain('BH20260912100000001')
+    expect(wrapper.find('.replenish-qty').text()).toContain('待补 200')
+
+    // 未挂补货单的水晶头该列为占位
+    const idleRow = findRowByName(wrapper, '水晶头')
+    expect(idleRow.find('.replenish-pending').exists()).toBe(false)
+    expect(idleRow.text()).toContain('-')
 
     wrapper.unmount()
   })

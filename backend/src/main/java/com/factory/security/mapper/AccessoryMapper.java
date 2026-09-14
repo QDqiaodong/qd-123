@@ -59,4 +59,29 @@ public interface AccessoryMapper extends BaseMapper<Accessory> {
     @Update("UPDATE accessory SET stock_quantity = #{actualQuantity}, update_time = NOW() "
             + "WHERE id = #{id} AND deleted = 0")
     int resetStock(@Param("id") Long id, @Param("actualQuantity") Integer actualQuantity);
+
+    /**
+     * 提交补货单：把配件标记为待补，回填补货单ID、单号（快照）与待补数量。
+     * 行级条件 {@code replenish_order_id IS NULL} 保证同一配件同时只能挂在一张有效补货单上：
+     * 并发提交两张单时只有一单能抢占成功，失败方影响行数 0，由调用方整单回滚；
+     * 已删除配件同样不允许占用待补标记（deleted = 0）
+     */
+    @Update("UPDATE accessory SET replenish_order_id = #{orderId}, replenish_order_no = #{orderNo}, "
+            + "replenish_pending_quantity = #{quantity}, update_time = NOW() "
+            + "WHERE id = #{accessoryId} AND deleted = 0 AND replenish_order_id IS NULL")
+    int markReplenishPending(@Param("accessoryId") Long accessoryId,
+                             @Param("orderId") Long orderId,
+                             @Param("orderNo") String orderNo,
+                             @Param("quantity") Integer quantity);
+
+    /**
+     * 作废补货单：清除该单在配件档案上的全部待补标记。
+     * 仅在标记仍指向被作废单据时清空（带 orderId 条件），避免误清新单——
+     * 极端情况下旧单作废与新单提交交错，不能把后来新单的待补标记一并抹掉。
+     * 不限制 deleted：配件即便在补货期间被软删除，其待补标记也要随作废一并清掉
+     */
+    @Update("UPDATE accessory SET replenish_order_id = NULL, replenish_order_no = NULL, "
+            + "replenish_pending_quantity = NULL, update_time = NOW() "
+            + "WHERE replenish_order_id = #{orderId}")
+    int clearReplenishPending(@Param("orderId") Long orderId);
 }

@@ -176,6 +176,9 @@ public class AccessoryServiceImpl extends ServiceImpl<AccessoryMapper, Accessory
         // 紧急口径：缺口达到下限一半及以上（2*缺口 >= 下限，含恰好一半的边界）；
         // 每次实时计算，改下限或换分区刷新后紧急标记与新缺口一致
         vo.setUrgent(2 * gap >= safetyStock);
+        // 待补标记直接取自配件档案：已提交补货单回写、作废清除，台账据此禁用重复勾选
+        vo.setReplenishPending(accessory.getReplenishOrderId() != null);
+        vo.setReplenishOrderNo(accessory.getReplenishOrderNo());
         vo.setCreateTime(accessory.getCreateTime());
         return vo;
     }

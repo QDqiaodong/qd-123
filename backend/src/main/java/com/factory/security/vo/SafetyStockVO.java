@@ -46,5 +46,14 @@ public class SafetyStockVO implements Serializable {
     /** 是否未分配分区：未分配分区的低位配件也必须列入台账 */
     private Boolean unassignedZone;
 
+    /**
+     * 是否已在补货单中待补：档案待补标记非空即 true。
+     * 台账据此禁用勾选并展示补货单号，避免同一配件被两张有效补货单重复占用
+     */
+    private Boolean replenishPending;
+
+    /** 占用该配件的已提交补货单号（待补中直接展示，可与补货单列表对账） */
+    private String replenishOrderNo;
+
     private LocalDateTime createTime;
 }
