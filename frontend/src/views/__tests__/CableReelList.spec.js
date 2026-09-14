@@ -103,9 +103,43 @@ const reelPage = () => ({
       stockMatched: false,
       openTime: '2026-09-12 09:00:00',
       createTime: '2026-09-12 08:00:00'
+    },
+    {
+      // 未开盘但配件档案已有 50 米其他来源库存：开盘必被当场拦截
+      id: 13,
+      reelNo: 'P-004',
+      accessoryId: 4,
+      accessoryName: '六类网线',
+      model: 'CAT6-UTP',
+      specUnit: 'm',
+      remainingMeters: 305,
+      status: 0,
+      statusText: '未开盘',
+      accessoryStockQuantity: 50,
+      accessoryDeleted: false,
+      stockMatched: null,
+      openTime: null,
+      createTime: '2026-09-12 12:00:00'
+    },
+    {
+      // 未开盘但绑定配件已删除：开盘必被当场拦截
+      id: 14,
+      reelNo: 'P-005',
+      accessoryId: 4,
+      accessoryName: '六类网线',
+      model: 'CAT6-UTP',
+      specUnit: 'm',
+      remainingMeters: 100,
+      status: 0,
+      statusText: '未开盘',
+      accessoryStockQuantity: null,
+      accessoryDeleted: true,
+      stockMatched: null,
+      openTime: null,
+      createTime: '2026-09-12 13:00:00'
     }
   ],
-  total: 3
+  total: 5
 })
 
 const mountPage = async () => {
@@ -327,6 +361,39 @@ describe('整盘电源线建档 - 开盘确认', () => {
     expect(openCableReel).not.toHaveBeenCalled()
     wrapper.unmount()
   })
+
+  it('配件档案现存不为 0 时当场拦截：不弹确认框、不发请求，并写出原因', async () => {
+    const wrapper = await mountPage()
+
+    const stockedRow = findRowByReelNo(wrapper, 'P-004')
+    clickButtonByText(stockedRow.element, '开盘确认')
+    await flushPromises()
+
+    expect(ElMessage.warning).toHaveBeenCalledWith(
+      expect.stringContaining('档案现存 50 米')
+    )
+    expect(ElMessage.warning).toHaveBeenCalledWith(
+      expect.stringContaining('现存为 0')
+    )
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled()
+    expect(openCableReel).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('绑定配件已删除时当场拦截：不弹确认框、不发请求', async () => {
+    const wrapper = await mountPage()
+
+    const deletedRow = findRowByReelNo(wrapper, 'P-005')
+    clickButtonByText(deletedRow.element, '开盘确认')
+    await flushPromises()
+
+    expect(ElMessage.warning).toHaveBeenCalledWith(
+      expect.stringContaining('已删除')
+    )
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled()
+    expect(openCableReel).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 })
 
 describe('整盘电源线建档 - 扣米', () => {
@@ -424,7 +491,7 @@ describe('整盘电源线建档 - 删除', () => {
     deleteCableReel.mockResolvedValue(undefined)
     ElMessageBox.confirm.mockImplementation(() => Promise.resolve())
 
-    // 已开盘行（P-001/P-003）不渲染删除按钮，只有未开盘的 P-002 有
+    // 已开盘行（P-001/P-003）不渲染删除按钮，未开盘行（P-002 等）才有
     const openedRow = findRowByReelNo(wrapper, 'P-001')
     expect(openedRow.text()).not.toContain('删除')
 

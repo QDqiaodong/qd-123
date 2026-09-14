@@ -402,6 +402,22 @@ const handleCreate = async () => {
 }
 
 const handleOpen = (row) => {
+  // 当场拦截两类注定失败的开盘：不弹确认框、不发请求，直接把原因写出来。
+  // 1) 绑定配件已删除；2) 配件档案现存不为 0（整盘须是米数唯一来源，
+  //    否则开盘后“盘上剩余 == 档案米数”恒不成立）。行数据来自最近一次列表刷新，
+  //    后端 open 仍会再校验一遍兜底并发
+  if (row.accessoryDeleted) {
+    ElMessage.warning(`盘 ${row.reelNo} 绑定的配件已删除，无法开盘确认，请改绑正常配件后重试`)
+    return
+  }
+  const stock = row.accessoryStockQuantity
+  if (stock != null && stock !== 0) {
+    ElMessage.warning(
+      `配件「${row.accessoryName}」档案现存 ${stock} 米，开盘要求档案现存为 0（整盘是米数唯一来源），`
+        + '请先把档案米数清零或改绑尚无库存的配件后再开盘'
+    )
+    return
+  }
   ElMessageBox.confirm(
     `确认开盘 ${row.reelNo} 吗？开盘后整盘 ${row.remainingMeters} 米将一次性计入配件「${row.accessoryName}」档案（要求该配件档案现存为 0，整盘是米数唯一来源），`
       + '盘上剩余与档案米数保持一致，之后才能从该盘扣米；同一配件同时只能有一个已开盘。',
